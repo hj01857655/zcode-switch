@@ -12,7 +12,10 @@
     "check:i18n": "node scripts/check-i18n-keys.mjs"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.1.1"
+    "@tauri-apps/api": "^2.1.1",
+    "@vitejs/plugin-react": "^4.7.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.1.0",

@@ -38,6 +38,9 @@ const ICONS = {
   alert: P("M8 2.2 14.8 13.8H1.2z") + P("M8 6.4v3.2") + P("M8 11.6v.2"),
 
   empty: P("M3 3h10") + P("M3 13h10") + `<path d="M8 6.2v3.6M6.2 8h3.6" stroke-dasharray="2 1.6"/>`,
+
+  // 侧边导航用
+  list: P("M3 4.2h10") + P("M3 8h10") + P("M3 11.8h5.5"),
 };
 
 export function ic(name, size = 16, cls = "") {
@@ -46,4 +49,9 @@ export function ic(name, size = 16, cls = "") {
   return `<svg class="ic${cls ? " " + cls : ""}" width="${size}" height="${size}" viewBox="0 0 16 16"
     fill="none" stroke="currentColor" stroke-width="1.5"
     stroke-linecap="butt" stroke-linejoin="miter" aria-hidden="true">${body}</svg>`;
+}
+
+// React 渲染层用：只取 path 体，由 <Ic> 组件包 svg
+export function iconBody(name) {
+  return ICONS[name] || "";
 }
