@@ -86,6 +86,20 @@ fn ipc_command_gate<R: tauri::Runtime>(
     Some(invoke)
 }
 
+/// generate_handler 产出的分发闭包对运行时泛型 R 推断失效（E0282），
+/// 用泛型包装函数在签名上钉住 R 再喂给 invoke_handler。
+fn gated_handler<R: tauri::Runtime>(
+    handler: impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static,
+) -> impl Fn(tauri::ipc::Invoke<R>) -> bool + Send + Sync + 'static {
+    move |invoke| {
+        if let Some(invoke) = ipc_command_gate(invoke) {
+            handler(invoke)
+        } else {
+            false
+        }
+    }
+}
+
 fn tray_menu_inner(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let paths = Paths::detect();
     let state = match store::get_state(&paths) {
@@ -1163,52 +1177,43 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .invoke_handler({
-            let handler = tauri::generate_handler![
-                get_state,
-                app_version,
-                capture_current,
-                rename_account,
-                delete_account,
-                update_account_from_live,
-                switch_to,
-                get_live_quota,
-                get_account_quota,
-                claim_preview,
-                claim_refresh,
-                claim_start,
-                claim_captcha_config,
-                claim_captcha_submit,
-                claim_cancel,
-                oauth_providers,
-                oauth_begin,
-                set_auth_proxy,
-                kill_zcode,
-                set_behavior,
-                set_language,
-                autostart_status,
-                autostart_set,
-                export_pick_path,
-                export_finalize,
-                export_all_pick_path,
-                export_all_finalize,
-                import_pick_files,
-                import_sealed,
-                pick_zcode_path,
-                set_zcode_path,
-                launch_zcode,
-                open_external,
-                open_settings,
-                reveal_main,
-            ];
-            move |invoke| {
-                if let Some(invoke) = ipc_command_gate(invoke) {
-                    handler(invoke)
-                } else {
-                    false
-                }
-            }
-        })
+        .invoke_handler(gated_handler(tauri::generate_handler![
+            get_state,
+            app_version,
+            capture_current,
+            rename_account,
+            delete_account,
+            update_account_from_live,
+            switch_to,
+            get_live_quota,
+            get_account_quota,
+            claim_preview,
+            claim_refresh,
+            claim_start,
+            claim_captcha_config,
+            claim_captcha_submit,
+            claim_cancel,
+            oauth_providers,
+            oauth_begin,
+            set_auth_proxy,
+            kill_zcode,
+            set_behavior,
+            set_language,
+            autostart_status,
+            autostart_set,
+            export_pick_path,
+            export_finalize,
+            export_all_pick_path,
+            export_all_finalize,
+            import_pick_files,
+            import_sealed,
+            pick_zcode_path,
+            set_zcode_path,
+            launch_zcode,
+            open_external,
+            open_settings,
+            reveal_main,
+        ]))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {
