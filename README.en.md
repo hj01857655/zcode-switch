@@ -50,6 +50,10 @@ CLI password (export / import): prefer the `ZSW_PASSWORD` environment variable (
 Deny all of them — nothing breaks.
 The embedded pages (such as the login page) are rendered by the system WebView, which relays their requests as system permission prompts attributed to the app; neither the app itself nor its embedded pages use any of these three capabilities.
 
+## Developer Docs
+
+- [Client version-header strategy](docs/APP-VERSION.md) — model/quota/OAuth channels follow the locally installed ZCode version; the claim channel is pinned to 3.14.0 (avoids upstream 3012 risk control)
+
 ## Build
 
 ```bash

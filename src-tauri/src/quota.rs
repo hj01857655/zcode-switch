@@ -20,7 +20,12 @@ fn no_window(prog: &str) -> std::process::Command {
 pub const QUOTA_LIMIT_URL: &str = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
 pub const SUBSCRIPTION_URL: &str = "https://open.bigmodel.cn/api/biz/subscription/list";
 pub const BILLING_BALANCE_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/billing/balance";
-pub const CLIENT_APP_VERSION: &str = "3.11.2";
+pub const CLIENT_APP_VERSION: &str = "3.16.3";
+
+/// 领取通道（billing/preview、billing/claim）固定版本：实测换成更高版本会触发 3012 风控，
+/// 与模型/额度通道的探测版本分开。版本策略总表见仓库 docs/APP-VERSION.md，
+/// 协议证据见 ZCode2api-go/docs/CLAIM.md。
+pub const CLAIM_APP_VERSION: &str = "3.14.0";
 
 pub(crate) fn client_platform() -> String {
     let os = crate::zcrypto::node_platform_for(std::env::consts::OS);
@@ -190,10 +195,14 @@ pub(crate) fn zai_billing_headers_with_mid(token: &str, mid: Option<String>) -> 
     zai_headers_with_version(zcode_app_version(), token, mid)
 }
 
+pub(crate) fn zai_claim_headers_with_mid(token: &str, mid: Option<String>) -> Vec<(String, String)> {
+    zai_headers_with_version(CLAIM_APP_VERSION.to_string(), token, mid)
+}
+
 pub(crate) struct OAuthFlowHeaders(pub Vec<(String, String)>);
 
 pub(crate) fn zai_oauth_headers_with_mid(token: &str, mid: Option<String>) -> OAuthFlowHeaders {
-    OAuthFlowHeaders(zai_headers_with_version(CLIENT_APP_VERSION.to_string(), token, mid))
+    OAuthFlowHeaders(zai_headers_with_version(zcode_app_version(), token, mid))
 }
 
 fn zai_headers_with_version(ver: String, token: &str, mid: Option<String>) -> Vec<(String, String)> {

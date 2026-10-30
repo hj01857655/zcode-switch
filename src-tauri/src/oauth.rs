@@ -22,7 +22,7 @@ pub const OAUTH_PROVIDERS: &[OAuthProvider] = &[
 const REDIRECT_ENC: &str = "zcode%3A%2F%2Foauth%2Fcallback";
 
 pub fn bridge_redirect_uri() -> String {
-    format!("https://zcode.z.ai/app/oauth/login?redirect={REDIRECT_ENC}&app_version={}", quota::CLIENT_APP_VERSION)
+    format!("https://zcode.z.ai/app/oauth/login?redirect={REDIRECT_ENC}&app_version={}", quota::zcode_app_version())
 }
 
 fn urlencode(s: &str) -> String {
