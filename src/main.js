@@ -533,12 +533,13 @@ async function autoClaimTick() {
 }
 
 function quotaBarHtml(pct) {
+  // 条与文字均为「已用」语义（调用方传入 percent_used = used%）；
+  // 剩余数值由各行的 rem 文本表达。此前画的是剩余，0 使用时满条 + 100% 极易误读。
   const used = pct == null ? null : Math.min(100, Math.max(0, pct));
-  const remaining = used == null ? null : 100 - used;
   const danger = used != null && used >= 90 ? " danger" : used != null && used >= 70 ? " warn" : "";
-  const txt = remaining == null ? "--" : remaining.toFixed(0) + "%";
-  const txtCls = (remaining ?? 100) >= 58 ? " in-fill" : "";
-  return `<div class="qbar${danger}"><div class="qbar-fill" style="width:${remaining ?? 100}%"></div><span class="qbar-pct${txtCls}">${txt}</span></div>`;
+  const txt = used == null ? "--" : used.toFixed(0) + "%";
+  const txtCls = (used ?? 0) >= 58 ? " in-fill" : "";
+  return `<div class="qbar${danger}"><div class="qbar-fill" style="width:${used ?? 0}%"></div><span class="qbar-pct${txtCls}">${txt}</span></div>`;
 }
 
 function itemKind(it) {
