@@ -615,7 +615,16 @@ function tierBadgeFor(id) {
   if (!q?.data) return "";
   const plans = q.data.plans || [];
   const pairs = plans.map((p) => [p.tier, p.tier_code]);
-  const list = (pairs.length ? pairs : q.data.plan_tier ? [[q.data.plan_tier, null]] : []).slice(0, 2);
+  // 鸡蛋批次与常驻套餐同为 start 档会并存，按档去重避免双徽章
+  const seen = new Set();
+  const list = (pairs.length ? pairs : q.data.plan_tier ? [[q.data.plan_tier, null]] : [])
+    .filter(([tier, code]) => {
+      const k = String(code || tier || "").toLowerCase();
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .slice(0, 2);
   if (!list.length) return `<span class="tier-b free">Free</span>`;
   return list.map(([tier, code]) => tierChipHtml(tier, code)).join("");
 }
