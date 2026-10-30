@@ -278,6 +278,8 @@ pub struct QuotaOverview {
     pub plan_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plan_expire: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_starts: Option<String>,
     pub is_empty: bool,
     pub items: Vec<QuotaItem>,
     pub refreshed_at: i64,
@@ -790,6 +792,7 @@ fn merge_parts(parts: Vec<QuotaOverview>) -> QuotaOverview {
         percent_used,
         plan_tier: pri_idx.map(|i| slots[i].tier.clone()).flatten(),
         plan_expire: pri_idx.map(|i| slots[i].expire.clone()).flatten(),
+        plan_starts: pri_idx.and_then(|i| slots[i].starts.clone()),
         is_empty: slots.is_empty(),
         items,
         refreshed_at: refreshed,
@@ -1127,6 +1130,7 @@ fn normalize_quota_limit(limit_resp: &Value, sub_resp: Option<&Value>) -> QuotaO
         percent_used,
         plan_tier,
         plan_expire,
+        plan_starts: plan_start,
         is_empty: limits.is_empty(),
         items,
         refreshed_at: 0,
@@ -1535,6 +1539,7 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
         percent_used,
         plan_tier: slots.get(pri_idx).and_then(|p| p.tier.clone()),
         plan_expire: slots.get(pri_idx).and_then(|p| p.expire.clone()).or(plan_expire_chain),
+        plan_starts: slots.get(pri_idx).and_then(|p| p.starts.clone()),
         is_empty: balance.get("balances").and_then(|b| b.as_array()).map(|a| a.is_empty()).unwrap_or(false),
         items,
         refreshed_at: 0,

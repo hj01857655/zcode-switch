@@ -664,19 +664,28 @@ function slotRowsHtml(items) {
   ].join("");
 }
 
-function expireInfo(s) {
+function expireInfo(s, starts) {
   if (!s) return null;
   const hasTime = s.length >= 16;
   const ms = new Date(hasTime ? s.replace(" ", "T") : s + "T23:59:59") - Date.now();
   if (isNaN(ms)) return { text: s, soon: false, warn: false };
-  const soon = ms <= 5 * 86400000;
-  const warn = ms <= 7 * 86400000;
-  return { text: soon && hasTime ? s : s.slice(0, 10), soon, warn };
+  // 短窗口滚动批次（每日投放的 Start Plan/臭鸡蛋等，起止 ≤48h）到期是正常生命周期，
+  // 不按 7 天阈值告警；精确到时刻展示
+  let shortWindow = false;
+  if (starts) {
+    const startMs = new Date(String(starts).replace(" ", "T")).getTime();
+    if (!isNaN(startMs) && ms >= startMs - Date.now() && ms - (startMs - Date.now()) <= 48 * 3600000) {
+      shortWindow = true;
+    }
+  }
+  const soon = !shortWindow && ms <= 5 * 86400000;
+  const warn = !shortWindow && ms <= 7 * 86400000;
+  return { text: (soon || shortWindow) && hasTime ? s : s.slice(0, 10), soon, warn };
 }
 
 function planGroupHtml(p) {
   const label = p.tier_code === "other" && !p.pid ? t("q.other") : (p.name || p.tier || "");
-  const exp = expireInfo(p.expire);
+  const exp = expireInfo(p.expire, p.starts);
   // 有起点则显示起→止区间；仅终点沿用「至 {date}」
   const expHtml = exp
     ? p.starts
@@ -782,7 +791,7 @@ function render() {
     const q = acctQuota[a.id];
     let meta = "";
     if (!a.has_config) meta += `<span class="no-cfg">${t("q.noCfg")}</span>`;
-    const exp = expireInfo(q?.data?.plan_expire);
+    const exp = expireInfo(q?.data?.plan_expire, q?.data?.plan_starts);
     if (exp) {
         meta += `<span class="${exp.warn ? "warn-line" : ""}">${esc(t("q.validUntil", { date: exp.text }))}</span>`;
     }
