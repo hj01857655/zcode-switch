@@ -57,6 +57,35 @@ fn sanitize_filename(name: &str) -> String {
         .collect()
 }
 
+/// captcha 子窗口只加载第三方验证码 SDK（阿里 CDN 动态注入），不经窗口隔离的
+/// 自定义命令就不是最小权限。该窗口唯一需要的是验证码流程本身的三个命令。
+const CAPTCHA_ALLOWED_COMMANDS: &[&str] = &["get_state", "claim_captcha_config", "claim_captcha_submit"];
+
+/// login 窗口加载的是外部 OAuth 页面（http(s)），与本地命令面完全隔离：
+/// 第三方页面内容一律不授予任何 IPC 命令。
+const LOGIN_WINDOW_LABEL: &str = "login";
+
+fn ipc_command_gate<R: tauri::Runtime>(
+    invoke: tauri::ipc::Invoke<R>,
+) -> Option<tauri::ipc::Invoke<R>> {
+    let command = invoke.message.command().to_string();
+    let label = invoke.message.webview().label().to_string();
+    let allowed = if label == LOGIN_WINDOW_LABEL {
+        false
+    } else if label == "captcha" {
+        CAPTCHA_ALLOWED_COMMANDS.contains(&command.as_str())
+    } else {
+        true
+    };
+    if !allowed {
+        invoke
+            .resolver
+            .reject(format!("ipc: command `{command}` is not allowed from window `{label}`"));
+        return None;
+    }
+    Some(invoke)
+}
+
 fn tray_menu_inner(app: &AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     let paths = Paths::detect();
     let state = match store::get_state(&paths) {
@@ -818,7 +847,7 @@ fn open_captcha_window(app: &AppHandle, auto: bool) -> Result<(), String> {
     .min_inner_size(340.0, 280.0)
     .maximizable(false)
     .resizable(false)
-    .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --no-proxy-server")
+    .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI --no-proxy-server")
     .visible(false)
     .build()
     .map_err(|e| e.to_string())?;
@@ -918,7 +947,7 @@ async fn open_settings(app: AppHandle) -> Result<(), String> {
     .inner_size(w, h)
     .min_inner_size(440.0, 540.0)
     .resizable(true)
-    .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --no-proxy-server")
+    .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI --no-proxy-server")
     .visible(false)
     .build()
     .map_err(|e| e.to_string())?;
@@ -1134,43 +1163,52 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
-        .invoke_handler(tauri::generate_handler![
-            get_state,
-            app_version,
-            capture_current,
-            rename_account,
-            delete_account,
-            update_account_from_live,
-            switch_to,
-            get_live_quota,
-            get_account_quota,
-            claim_preview,
-            claim_refresh,
-            claim_start,
-            claim_captcha_config,
-            claim_captcha_submit,
-            claim_cancel,
-            oauth_providers,
-            oauth_begin,
-            set_auth_proxy,
-            kill_zcode,
-            set_behavior,
-            set_language,
-            autostart_status,
-            autostart_set,
-            export_pick_path,
-            export_finalize,
-            export_all_pick_path,
-            export_all_finalize,
-            import_pick_files,
-            import_sealed,
-            pick_zcode_path,
-            set_zcode_path,
-            launch_zcode,
-            open_external,
-            open_settings,
-            reveal_main,
-        ])
+        .invoke_handler({
+            let handler = tauri::generate_handler![
+                get_state,
+                app_version,
+                capture_current,
+                rename_account,
+                delete_account,
+                update_account_from_live,
+                switch_to,
+                get_live_quota,
+                get_account_quota,
+                claim_preview,
+                claim_refresh,
+                claim_start,
+                claim_captcha_config,
+                claim_captcha_submit,
+                claim_cancel,
+                oauth_providers,
+                oauth_begin,
+                set_auth_proxy,
+                kill_zcode,
+                set_behavior,
+                set_language,
+                autostart_status,
+                autostart_set,
+                export_pick_path,
+                export_finalize,
+                export_all_pick_path,
+                export_all_finalize,
+                import_pick_files,
+                import_sealed,
+                pick_zcode_path,
+                set_zcode_path,
+                launch_zcode,
+                open_external,
+                open_settings,
+                reveal_main,
+            ];
+            move |invoke| {
+                if let Some(invoke) = ipc_command_gate(invoke) {
+                    handler(invoke)
+                } else {
+                    false
+                }
+            }
+        })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 if window.label() == "main" {

@@ -587,7 +587,8 @@ function fmtTokens(n) {
 }
 function balRowHtml(it) {
   const rem = it.total != null && it.remaining != null ? `${fmtTokens(it.remaining)}/${fmtTokens(it.total)}` : "";
-  const label = it.name.replace(/^GLM-?/i, "");
+  // 仅剃掉「GLM-数字」形态的前缀（GLM-5.3 → 5.3），别名模型（GLM-5.3-Flash）保留全名
+  const label = /^[Gg][Ll][Mm]-?\d/.test(it.name) ? it.name.replace(/^[Gg][Ll][Mm]-?/i, "") : it.name;
   return `
   <div class="q-win mini">
     <span class="q-win-label" title="${esc(it.name)}">${esc(label)}</span>

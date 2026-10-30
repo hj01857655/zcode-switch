@@ -12,17 +12,17 @@ A Tauri 2 desktop tool for one-click switching between multiple ZCode accounts, 
 - **Add accounts**: OAuth login for new accounts inside the tool (BigModel / z.ai entries), never touching the current login
 - **Quota display**: inline plan quota and reset time per account row, multi-plan grouping
 - **Claim promotions**: one-click claim for eligible promotions; "Auto claim" toggle (off by default) checks and claims periodically — manual actions take priority
-- **Encrypted import / export**: `.zsb` bundle, PBKDF2(100k) + AES-256-GCM password encryption
+- **Encrypted import / export**: `.zsb` bundle, PBKDF2(600k) + AES-256-GCM password encryption
 - **Bilingual UI (中文 / English)**: one-click switch in Settings — main window, tray, error messages and CLI output all covered; first run follows your OS language
 - **Tray / autostart / CLI automation**
 
 ## Security Design
 
 - **Local first**: all data stays on your machine; no telemetry, no remote storage; quota queries go directly to official endpoints
-- **WebView CSP**: the `script-src` baseline is `'self'`; minimal third-party script/image sources are allowed for the official promotion web component. UI events do not rely on dynamic execution — they go through a whitelist-based dispatcher
+- **WebView CSP**: main/settings windows use `script-src 'self'` (no eval, no third-party script origins); only the captcha sub-window allows `o.alicdn.com` and `unsafe-eval` for the Aliyun captcha SDK; `img-src` is scoped to Aliyun CDN; local pages add a restrictive meta CSP on top
 - **No account loss**: the current login is auto-preserved before switching if not yet saved; file writes go through a temp file + atomic rename
 - **Path traversal protection**: account id whitelist (`[A-Za-z0-9-]`); delete/read cannot escape the account store directory
-- **Encrypted export**: PBKDF2-HMAC-SHA256 (100k iterations) + AES-256-GCM, random salt/nonce; wrong password simply fails, no plaintext traces
+- **Encrypted export**: PBKDF2-HMAC-SHA256 (600k iterations, OWASP 2025 baseline; legacy v1 bundles at 100k remain importable) + AES-256-GCM, random salt/nonce; wrong password simply fails, no plaintext traces
 - **Credentials decrypted locally only**: decryption is used solely to display username/email; export files are password-encrypted
 
 ## CLI

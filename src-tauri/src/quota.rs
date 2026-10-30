@@ -879,9 +879,9 @@ fn looks_like_dt(s: &str) -> bool {
 }
 
 fn extract_expire(obj: &Value) -> Option<String> {
-    const KEYS: [&str; 12] = [
+    const KEYS: [&str; 13] = [
         "nextRenewTime", "expireTime", "expire_time", "endTime", "end_time", "expireAt", "expiredTime", "validEndTime",
-        "expires_at", "expiresAt", "expired_at", "period_end",
+        "expires_at", "expiresAt", "expired_at", "period_end", "ends_at",
     ];
     for k in KEYS {
         let Some(v) = obj.get(k) else { continue };
@@ -1245,6 +1245,16 @@ fn tier_rank(code: Option<&str>) -> u8 {
     }
 }
 
+/// 重复条目合并时的字段累加：任一侧缺失即视为缺失（None 不冒充 0）
+fn add_opt(a: Option<f64>, b: Option<f64>) -> Option<f64> {
+    match (a, b) {
+        (Some(x), Some(y)) => Some(x + y),
+        (Some(x), None) => Some(x),
+        (None, Some(y)) => Some(y),
+        (None, None) => None,
+    }
+}
+
 fn normalize_balance(balance_data: &Value) -> QuotaOverview {
     let balance = unwrap(balance_data);
     if std::env::var("ZSW_DUMP_SUB").is_ok() {
@@ -1335,7 +1345,19 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
                     if s.expire.is_none() {
                         s.expire = extract_expire(item);
                     }
-                    s.items.push(it);
+                    // 同槽内重复条目（上游 #30：同源渠道吐多行同模型）按 show_name 合并：
+                    // 保留首次出现的元数据，total/used/remaining 累加
+                    if let Some(prev) = s.items.iter_mut().find(|prev| prev.name == it.name) {
+                        prev.total = add_opt(prev.total, it.total);
+                        prev.used = add_opt(prev.used, it.used);
+                        prev.remaining = add_opt(prev.remaining, it.remaining);
+                        prev.percent_used = match (prev.total, prev.used) {
+                            (Some(t), Some(u)) if t > 0.0 => Some((u / t * 100.0).clamp(0.0, 100.0)),
+                            _ => prev.percent_used,
+                        };
+                    } else {
+                        s.items.push(it);
+                    }
                 }
                 None => loose.push(it),
             }

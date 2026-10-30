@@ -9,12 +9,31 @@ use serde_json::{json, Value};
 use sha2::Sha256;
 
 pub const FORMAT_BUNDLE: &str = "zsw-accounts-bundle";
-pub const KDF_ITERS: u32 = 100_000;
+/// OWASP 2025 基线（PBKDF2-HMAC-SHA256 ≥ 600k）。
+const KDF_ITERS_CURRENT: u32 = 600_000;
+/// v1 包（100k 迭代）的兼容读取值；新导出一律用 CURRENT。
+const KDF_ITERS_LEGACY: u32 = 100_000;
 
-fn derive_key(password: &str, salt: &[u8]) -> [u8; 32] {
+fn derive_key(password: &str, salt: &[u8], iters: u32) -> [u8; 32] {
     let mut key = [0u8; 32];
-    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, KDF_ITERS, &mut key);
+    pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, iters, &mut key);
     key
+}
+
+/// 读取 envelope 里的迭代数：缺失（理论上不存在）或异常小值按 legacy 处理，
+/// 保证旧包永远可开。上限钳制防恶意 envelope 把派生拖成 DoS。
+fn envelope_iters(kdf: &Value) -> u32 {
+    let iters = kdf
+        .get("iters")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(KDF_ITERS_LEGACY as u64);
+    if iters < KDF_ITERS_LEGACY as u64 {
+        KDF_ITERS_LEGACY
+    } else if iters > 10_000_000 {
+        10_000_000
+    } else {
+        iters as u32
+    }
 }
 
 pub fn seal(payload: &Value, password: &str, format: &str) -> Result<Value, String> {
@@ -27,7 +46,7 @@ pub fn seal(payload: &Value, password: &str, format: &str) -> Result<Value, Stri
     aes_gcm::aead::OsRng.fill_bytes(&mut nonce_b);
 
     let plain = serde_json::to_vec(payload).map_err(|e| crate::i18n::trf("err.serialize", &[("e", &e.to_string())]))?;
-    let key = derive_key(password, &salt);
+    let key = derive_key(password, &salt, KDF_ITERS_CURRENT);
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| crate::i18n::trf("err.cipher.key", &[("e", &e.to_string())]))?;
     let ct = cipher
         .encrypt(Nonce::from_slice(&nonce_b), plain.as_slice())
@@ -37,7 +56,7 @@ pub fn seal(payload: &Value, password: &str, format: &str) -> Result<Value, Stri
     Ok(json!({
         "format": format,
         "version": 1,
-        "kdf": { "algo": "pbkdf2-hmac-sha256", "iters": KDF_ITERS, "salt": B64.encode(salt) },
+        "kdf": { "algo": "pbkdf2-hmac-sha256", "iters": KDF_ITERS_CURRENT, "salt": B64.encode(salt) },
         "cipher": { "algo": "aes-256-gcm", "nonce": B64.encode(nonce_b), "tag": B64.encode(tag), "data": B64.encode(data) },
     }))
 }
@@ -57,7 +76,8 @@ pub fn open(envelope: &Value, password: &str) -> Result<Value, String> {
         return Err(crate::i18n::tr("err.cipher.nonce_len"));
     }
 
-    let key = derive_key(password, &salt);
+    // 迭代数随包走：v1 旧包 100k，新包 600k——旧导出文件永远可开
+    let key = derive_key(password, &salt, envelope_iters(kdf));
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|e| crate::i18n::trf("err.cipher.key", &[("e", &e.to_string())]))?;
     let mut buf = data.clone();
     buf.extend_from_slice(&tag);
