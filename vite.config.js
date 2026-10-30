@@ -7,6 +7,10 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 5173,
     strictPort: true,
+    // cargo 在 Windows 上锁住 target/ 内的 DLL，chokidar 盯到就 EBUSY 崩掉 dev server
+    watch: {
+      ignored: ["**/src-tauri/target/**", "**/dist/**"],
+    },
   },
   envPrefix: ["VITE_", "TAURI_"],
   build: {
