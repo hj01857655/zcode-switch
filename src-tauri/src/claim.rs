@@ -9,6 +9,7 @@ use std::time::Duration;
 pub const BILLING_PREVIEW_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/billing/preview";
 pub const BILLING_CLAIM_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/billing/claim";
 pub const CLIENT_CONFIGS_URL: &str = "https://zcode.z.ai/api/v1/client/configs";
+pub const MARKETING_TOUCH_URL: &str = "https://zcode.z.ai/api/v1/marketing/touch";
 
 const CLAIM_TIMEOUT_SECS: u64 = 25;
 
@@ -227,7 +228,130 @@ pub fn preview_plans(
         quota::zcode_app_version(),
         quota::client_platform()
     );
-    preview_once(&url, &token, device_mid)
+    let mid = device_mid.clone();
+    let mut base = match preview_once(&url, &token, mid) {
+        Ok(p) => p,
+        Err(e) => {
+            // 官方领取入口由营销投放驱动，preview 只是副通道：它坏了不能连坐
+            let touch = touch_plans(&token, device_mid.clone());
+            if touch.is_empty() {
+                return Err(e);
+            }
+            touch
+        }
+    };
+    for tp in touch_plans(&token, device_mid) {
+        match base.iter().position(|p| p.plan_id == tp.plan_id) {
+            Some(i) => {
+                // preview 条目缺权益明细时，用投放里的完整 zcode_plan 补全
+                if base[i].grant_items.is_empty() && !tp.grant_items.is_empty() {
+                    base[i] = tp;
+                }
+            }
+            None => base.push(tp),
+        }
+    }
+    base.sort_by(|a, b| b.priority.cmp(&a.priority).then(a.plan_id.cmp(&b.plan_id)));
+    Ok(base)
+}
+
+/// 营销触点投放：`deliveries[].banner.buttons[].action.type == "claim_zcode_plan"`
+/// 才是「该号当前可领」的权威信号（实测 preview 恒空，五个已领到的号也一样空）。
+/// 此端点对 app_version 敏感——老版本头返回空 deliveries，必须走真实客户端版本头，
+/// 不能复用领取通道钉死的 3.14.0。投放按 mid + 账号双重分配，mid 用该号自己的。
+fn touch_plans(token: &str, mid: Option<String>) -> Vec<ClaimPlan> {
+    let url = format!(
+        "{MARKETING_TOUCH_URL}?seq=1&app_version={}&platform={}",
+        quota::zcode_app_version(),
+        quota::client_platform()
+    );
+    let mut req = agent().get(&url);
+    for (k, v) in quota::zai_billing_headers_with_mid(token, mid) {
+        req = req.set(&k, &v);
+    }
+    let resp = match req.call() {
+        Ok(r) => match r.into_string() {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("[zsw] marketing/touch: read failed: {e}");
+                return vec![];
+            }
+        },
+        Err(e) => {
+            eprintln!("[zsw] marketing/touch: {}", http_err("", e));
+            return vec![];
+        }
+    };
+    let v: Value = match serde_json::from_str(&resp) {
+        Ok(x) => x,
+        Err(_) => return vec![],
+    };
+    let dels = match v.pointer("/data/deliveries").and_then(|d| d.as_array()) {
+        Some(a) => a.clone(),
+        None => return vec![],
+    };
+    let mut out: Vec<ClaimPlan> = vec![];
+    for d in &dels {
+        let wanted: Vec<String> = d
+            .pointer("/banner/buttons")
+            .and_then(|b| b.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|b| {
+                        let act = b.get("action")?;
+                        if act.get("type").and_then(|t| t.as_str()) != Some("claim_zcode_plan") {
+                            return None;
+                        }
+                        act.get("args")
+                            .and_then(|a| a.get("plan_id").or_else(|| a.get("planId")))
+                            .and_then(|p| p.as_str())
+                            .map(|s| s.trim().to_string())
+                            .filter(|s| !s.is_empty())
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if wanted.is_empty() {
+            continue;
+        }
+        // bundle.args.zcode_plan 与 preview 的 plan 同构，带 entitlements/priority。
+        // 实测结构：background = { bundle:{src}, entry, args:{zcode_plan} } —— args 与 bundle 同级
+        let zp = d
+            .pointer("/banner/background/args/zcode_plan")
+            .or_else(|| d.pointer("/banner/background/bundle/args/zcode_plan"));
+        let mut matched = false;
+        if let Some(p) = zp {
+            let pid = p
+                .get("plan_id")
+                .or_else(|| p.get("planId"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if !pid.is_empty() && wanted.iter().any(|w| *w == pid) {
+                if let Some(plan) = parse_plan(p) {
+                    out.push(plan);
+                    matched = true;
+                }
+            }
+        }
+        if !matched {
+            for pid in wanted {
+                if out.iter().any(|p| p.plan_id == pid) {
+                    continue;
+                }
+                out.push(ClaimPlan {
+                    name: pid.clone(),
+                    description: String::new(),
+                    priority: 0,
+                    plan_id: pid,
+                    grants: vec![],
+                    grant_items: vec![],
+                });
+            }
+        }
+    }
+    out
 }
 
 fn http_err(prefix: &str, e: ureq::Error) -> String {

@@ -20,7 +20,7 @@ fn no_window(prog: &str) -> std::process::Command {
 pub const QUOTA_LIMIT_URL: &str = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
 pub const SUBSCRIPTION_URL: &str = "https://open.bigmodel.cn/api/biz/subscription/list";
 pub const BILLING_BALANCE_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/billing/balance";
-pub const CLIENT_APP_VERSION: &str = "3.16.3";
+pub const CLIENT_APP_VERSION: &str = "3.17.1";
 
 /// 领取通道（billing/preview、billing/claim）固定版本：实测换成更高版本会触发 3012 风控，
 /// 与模型/额度通道的探测版本分开。版本策略总表见仓库 docs/APP-VERSION.md，
@@ -1541,6 +1541,19 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
         }
     };
 
+    // 空额度判定同时看桶与计划：-wk 批次 19:00 领取后 plans[] 已 active，
+    // 但额度桶要到 effective_at（实测 23:00）才下发，此窗口内桶空不等于无额度
+    let buckets_empty = balance
+        .get("balances")
+        .and_then(|b| b.as_array())
+        .map(|a| a.is_empty())
+        .unwrap_or(false);
+    let plans_empty = balance
+        .get("plans")
+        .and_then(|p| p.as_array())
+        .map(|a| a.is_empty())
+        .unwrap_or(false);
+
     QuotaOverview {
         total,
         used,
@@ -1549,7 +1562,7 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
         plan_tier: slots.get(pri_idx).and_then(|p| p.tier.clone()),
         plan_expire: slots.get(pri_idx).and_then(|p| p.expire.clone()).or(plan_expire_chain),
         plan_starts: slots.get(pri_idx).and_then(|p| p.starts.clone()),
-        is_empty: balance.get("balances").and_then(|b| b.as_array()).map(|a| a.is_empty()).unwrap_or(false),
+        is_empty: buckets_empty && plans_empty,
         items,
         refreshed_at: 0,
         source: String::new(),
