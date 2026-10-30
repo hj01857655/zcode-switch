@@ -228,19 +228,21 @@ pub fn preview_plans(
         quota::zcode_app_version(),
         quota::client_platform()
     );
-    let mid = device_mid.clone();
-    let mut base = match preview_once(&url, &token, mid) {
+    // 官方领取入口由营销投放驱动，preview 只是副通道：preview 坏了不连坐，
+    // 但 touch 只发一次（两路都要用它）
+    let touch = touch_plans(&token, device_mid.clone());
+    let preview_err;
+    let mut base = match preview_once(&url, &token, device_mid) {
         Ok(p) => p,
         Err(e) => {
-            // 官方领取入口由营销投放驱动，preview 只是副通道：它坏了不能连坐
-            let touch = touch_plans(&token, device_mid.clone());
+            preview_err = e;
             if touch.is_empty() {
-                return Err(e);
+                return Err(preview_err);
             }
-            touch
+            touch.clone()
         }
     };
-    for tp in touch_plans(&token, device_mid) {
+    for tp in touch {
         match base.iter().position(|p| p.plan_id == tp.plan_id) {
             Some(i) => {
                 // preview 条目缺权益明细时，用投放里的完整 zcode_plan 补全
