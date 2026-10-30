@@ -130,6 +130,8 @@ export const zh = {
   "q.unknown": "未知",
   "q.validUntil": "有效期至 {date}",
   "q.validUntilShort": "至 {date}",
+  "q.validRange": "{start} → {end}",
+  "q.validRangeShort": "{start}→{end}",
   "q.noCfg": "无 config 快照（切换后沿用现有 config）",
   "q.countShort": "次数",
   "q.monthlyShort": "月度",

@@ -130,6 +130,8 @@ export const en = {
   "q.unknown": "unknown",
   "q.validUntil": "Valid until {date}",
   "q.validUntilShort": "until {date}",
+  "q.validRange": "{start} → {end}",
+  "q.validRangeShort": "{start}→{end}",
   "q.noCfg": "No config snapshot (existing config stays after switching)",
   "q.countShort": "Prompts",
   "q.monthlyShort": "Monthly",

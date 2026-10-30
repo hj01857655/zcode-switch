@@ -677,12 +677,18 @@ function expireInfo(s) {
 function planGroupHtml(p) {
   const label = p.tier_code === "other" && !p.pid ? t("q.other") : (p.name || p.tier || "");
   const exp = expireInfo(p.expire);
+  // 有起点则显示起→止区间；仅终点沿用「至 {date}」
+  const expHtml = exp
+    ? p.starts
+      ? `<span class="pg-exp${exp.warn ? " warn-line" : ""}" title="${esc(t("q.validUntil", { date: exp.text }))}">${esc(t("q.validRangeShort", { start: p.starts.slice(0, 10), end: exp.text }))}</span>`
+      : `<span class="pg-exp${exp.warn ? " warn-line" : ""}" title="${esc(t("q.validUntil", { date: exp.text }))}">${esc(t("q.validUntilShort", { date: exp.text }))}</span>`
+    : "";
   return `
   <div class="plan-grp">
     <div class="pg-head">
       ${p.tier ? tierChipHtml(p.tier, p.tier_code) : ""}
       <span class="pg-name" title="${esc(label)}">${esc(label)}</span>
-      ${exp ? `<span class="pg-exp${exp.warn ? " warn-line" : ""}" title="${esc(t("q.validUntil", { date: exp.text }))}">${esc(t("q.validUntilShort", { date: exp.text }))}</span>` : ""}
+      ${expHtml}
     </div>
     ${slotRowsHtml(p.items)}
   </div>`;

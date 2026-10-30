@@ -260,6 +260,8 @@ pub struct PlanSlot {
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expire: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub starts: Option<String>,
     pub total: Option<f64>,
     pub used: Option<f64>,
     pub remaining: Option<f64>,
@@ -945,6 +947,48 @@ fn extract_expire(obj: &Value) -> Option<String> {
     None
 }
 
+/// 计划起始时间（starts_at 等）。effective_at:0 之类的占位值按无起始处理。
+fn extract_start(obj: &Value) -> Option<String> {
+    const KEYS: [&str; 6] = ["starts_at", "startsAt", "start_time", "startTime", "begins_at", "effective_at"];
+    use chrono::TimeZone;
+    for k in KEYS {
+        let Some(v) = obj.get(k) else { continue };
+        let n = v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse::<i64>().ok()));
+        if let Some(n) = n {
+            if n <= 1_000_000_000 {
+                continue;
+            }
+            let dt = if n > 1_000_000_000_000 {
+                chrono::Local.timestamp_millis_opt(n).single()
+            } else {
+                chrono::Local.timestamp_opt(n, 0).single()
+            };
+            if let Some(t) = dt {
+                return Some(t.format("%Y-%m-%d %H:%M").to_string());
+            }
+            continue;
+        }
+        if let Some(s) = v.as_str() {
+            let t = s.trim();
+            if t.is_empty() {
+                continue;
+            }
+            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(t) {
+                return Some(dt.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M").to_string());
+            }
+            let d = safe_prefix(t, 10);
+            if looks_like_date(d) {
+                return if looks_like_dt(t) {
+                    Some(safe_prefix(t, 16).to_string())
+                } else {
+                    Some(d.to_string())
+                };
+            }
+        }
+    }
+    None
+}
+
 fn expiry_field(v: &Value) -> Option<String> {
     match v {
         Value::String(s) => {
@@ -1023,6 +1067,7 @@ fn normalize_quota_limit(limit_resp: &Value, sub_resp: Option<&Value>) -> QuotaO
     let level = data.get("level").and_then(|l| l.as_str()).map(String::from);
     let mut plan_tier = level.as_deref().map(tier_from_level);
     let mut plan_expire: Option<String> = None;
+    let mut plan_start: Option<String> = None;
     let mut product_name: Option<String> = None;
     if let Some(sub) = sub_resp {
         if business_ok(sub) {
@@ -1042,6 +1087,7 @@ fn normalize_quota_limit(limit_resp: &Value, sub_resp: Option<&Value>) -> QuotaO
                         }
                     }
                     plan_expire = extract_expire(s);
+                    plan_start = extract_start(s);
                 }
             }
         }
@@ -1063,6 +1109,7 @@ fn normalize_quota_limit(limit_resp: &Value, sub_resp: Option<&Value>) -> QuotaO
             tier_code: plan_tier.as_deref().map(tier_code_from_display),
             name: product_name,
             expire: plan_expire.clone(),
+            starts: plan_start.clone(),
             total,
             used,
             remaining,
@@ -1284,6 +1331,7 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
                         tier_code: Some(tier_code),
                         name: Some(pname.filter(|s| !s.trim().is_empty()).unwrap_or(pid)),
                         expire: extract_expire(pl),
+                        starts: extract_start(pl),
                         ..Default::default()
                     }
                 })
