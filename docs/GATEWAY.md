@@ -48,7 +48,7 @@ Go 版对应物：`server.go`（路由+鉴权）、`anthropic.go`（222 行）�
 | 429 | 60 s（限流/额度） |
 | 405 / body 含 3012 | 10 min（风控） |
 | 3008/3009/3010 | 60 s（并发上限） |
-| 3007（captcha verify failed） | 0（直接返回不换号；upstream.rs 现状落「其他」档。当前靠服务端 `skip_model_request:true` 不会出现；若豁免翻 false 即确定性拒绝，固定 JWT 无限重打有指纹风险——届时改冷却或接取票，见 §6.3） |
+| 3007（captcha verify failed） | 60 s（已实现，upstream.rs 按 **body code** 匹配——HTTP 形态是 400+`code:3007`，不能按状态码匹配。当前靠服务端 `skip_model_request:true` 不会出现；若豁免翻 false 即确定性拒绝，60s 档防固定 JWT 无限重打。真支持则接无痕取票，见 §6.3） |
 | 其他 | 0（直接返回，不换号） |
 
 策略：失败换下一号，冷却期内跳过；全部耗尽回 503。`window_test.go` 里有窗口调度测试，Rust 版同构。

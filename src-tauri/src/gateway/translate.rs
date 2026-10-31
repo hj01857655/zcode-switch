@@ -1,5 +1,5 @@
 // GATEWAY 翻译层：/v1/messages（Anthropic 原生）直通转换器
-// 语义对齐 ZCode2api-go translate.go：system = 白名单前缀 + 用户追加段（无 cache_control）、
+// 语义对齐 ZCode2api-go translate.go：system = 白名单前缀 + 用户追加段（逐块 cache_control ephemeral）、
 // max_tokens 钳制、metadata.user_id 形状照发、output_config.effort 思考档。
 // M2 范围：messages 入站（原生形态）；OpenAI chat/responses 转换器 M3/M4 接入。
 use serde_json::{json, Value};
@@ -55,12 +55,13 @@ pub fn anthropic_to_upstream(req: &Value) -> Result<Value, String> {
         _ => {}
     }
 
+    // 官方 body 逐个 system 块都带 cache_control ephemeral（plan-08 §4），形状照发
     let mut system: Vec<Value> = prefix_segs()
         .into_iter()
-        .map(|t| json!({ "type": "text", "text": t }))
+        .map(|t| json!({ "type": "text", "text": t, "cache_control": { "type": "ephemeral" } }))
         .collect();
     if !sys_extra.is_empty() {
-        system.push(json!({ "type": "text", "text": sys_extra.join("\n\n") }));
+        system.push(json!({ "type": "text", "text": sys_extra.join("\n\n"), "cache_control": { "type": "ephemeral" } }));
     }
 
     // max_tokens：缺省 4096，上限 128000

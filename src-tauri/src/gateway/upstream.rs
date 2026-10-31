@@ -17,14 +17,13 @@ impl std::fmt::Display for UpstreamError {
     }
 }
 
-/// 上游请求头全集（Go client.go:75 对齐；版本随本机 3.17.1）
+/// 上游请求头全集：版本头族复用 quota 的真实探测实现（zcode_app_version/平台/设备 mid），
+/// 补 messages 专用头。官方桌面实录含 x-zcode-app-version 族与 x-request-id（plan-08 §2）。
 pub fn headers(token: &str) -> Vec<(String, String)> {
-    vec![
-        ("Authorization".into(), format!("Bearer {token}")),
-        ("Content-Type".into(), "application/json".into()),
-        ("anthropic-version".into(), "2023-06-01".into()),
-        ("User-Agent".into(), "ZCode/3.17.1 ai-sdk/anthropic/3.0.81".into()),
-    ]
+    let mut h = crate::quota::zai_billing_headers(token);
+    h.push(("Content-Type".into(), "application/json".into()));
+    h.push(("anthropic-version".into(), "2023-06-01".into()));
+    h
 }
 
 /// 发送 anthropic body（上游一律 stream=true，由调用侧聚合或透传）。
@@ -67,6 +66,7 @@ pub fn cooldown_secs(status: u16, body: &str) -> u64 {
         429 => 60,                 // 限流/额度
         405 => 10 * 60,            // 风控
         _ if body.contains("3012") => 10 * 60,
+        _ if body.contains("3007") => 60, // 安全验证：body code（HTTP 400），确定性拒绝，不冷却会拿固定 JWT 无限重打
         _ if body.contains("3008") || body.contains("3009") || body.contains("3010") => 60,
         _ => 0,
     }

@@ -1194,3 +1194,113 @@ input:focus-visible,
 .gateway-card .about-ver.on { color: var(--mint); }
 .gateway-actions { display: flex; gap: 10px; }
 .gateway-actions .btn-primary { flex: 1; justify-content: center; }
+
+/* ---- 2API 面板 v2：状态头 / endpoint 行 / curl / 日志空态 ---- */
+.x-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.x-lamp {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--ink-mute);
+  flex: none;
+}
+.x-lamp.on {
+  background: var(--mint);
+  box-shadow: 0 0 8px var(--mint-dim);
+}
+.x-title {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.x-state { font-size: 12px; color: var(--ink-mute); }
+.x-state.on { color: var(--mint); }
+.x-head-actions { margin-left: auto; }
+.x-endpoint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 8px;
+}
+.x-endpoint-label {
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--ink-mute);
+}
+.x-endpoint code {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--amber);
+}
+.x-label {
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--ink-mute);
+  margin-bottom: 8px;
+}
+.x-section { display: flex; flex-direction: column; }
+.x-field-tag {
+  align-self: center;
+  font-size: 10px;
+  letter-spacing: 1px;
+  color: var(--ink-mute);
+  padding: 0 6px;
+}
+.x-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+}
+.x-key-label { color: var(--ink-mute); }
+.x-key-val { font-family: var(--mono); color: var(--ink-dim); }
+.x-key-toggle {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: var(--amber);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 0;
+}
+.x-curl {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 8px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.7;
+}
+.x-log-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 22px;
+  background: var(--bg-2);
+  border: 1px dashed var(--hairline-soft);
+  border-radius: 8px;
+  color: var(--ink-mute);
+  font-size: 12px;
+}
+.x-err {
+  color: var(--red);
+  font-size: 12px;
+  margin-top: -6px;
+}
