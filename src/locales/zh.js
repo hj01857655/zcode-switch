@@ -173,7 +173,7 @@ export const zh = {
   "s.browse": "浏览",
   "s.githubLink": "GitHub 仓库 · 问题反馈与更新",
   "a.menuLabel": "关于",
-  "x.menuLabel": "2API 反代",
+  "x.menuLabel": "网关",
   "a.verLabel": "版本",
   "a.repoLabel": "项目仓库",
   "a.safetyLabel": "账号库安全",

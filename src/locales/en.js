@@ -173,7 +173,7 @@ export const en = {
   "s.browse": "Browse",
   "s.githubLink": "GitHub repository · feedback & updates",
   "a.menuLabel": "About",
-  "x.menuLabel": "2API Proxy",
+  "x.menuLabel": "Gateway",
   "a.verLabel": "Version",
   "a.repoLabel": "Repository",
   "a.safetyLabel": "Account library safety",

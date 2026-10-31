@@ -1,5 +1,5 @@
-// React 版 2API 页：反代服务控制面板（M1 接线 + 完整面板视觉）
-// 服务本体为 Rust 内嵌 axum（src-tauri/src/gateway/），本页是其控制面。
+// React 版 Gateway 页：反代服务控制面板（M1 接线 gateway_start/stop/status）
+// 布局与设置页同构（靠左表单流 .settings），状态区置顶。
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../lib/i18n.js";
@@ -11,11 +11,10 @@ export default function GatewayPage() {
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const [showKey, setShowKey] = useState(false);
 
   const refresh = async () => {
     try {
-      setStatus(await invoke("twoapi_status"));
+      setStatus(await invoke("gateway_status"));
     } catch (e) {
       setErr(String(e));
     }
@@ -47,94 +46,82 @@ export default function GatewayPage() {
   };
 
   const doStart = () => guard(async () => {
-    await invoke("twoapi_start", { port: null, apiKey: null });
+    await invoke("gateway_start", { port: null, apiKey: null });
   });
   const doStop = () => guard(async () => {
-    await invoke("twoapi_stop");
+    await invoke("gateway_stop");
   });
   const doSave = () => guard(async () => {
     const p = parseInt(port.trim(), 10);
     if (!Number.isFinite(p) || p <= 0 || p > 65535) throw new Error(t("x.badPort"));
-    await invoke("twoapi_start", { port: p, apiKey: apiKey.trim() || null });
+    await invoke("gateway_start", { port: p, apiKey: apiKey.trim() || null });
     setApiKey("");
   });
 
   const endpoint = `http://127.0.0.1:${status?.port ?? 8081}/v1`;
   const curlSample =
     `curl ${endpoint}/chat/completions \\\n` +
-    `  -H "Authorization: Bearer ${status?.apiKeyMasked || "sk-…"}" \\\n` +
+    `  -H "Authorization: Bearer <API_KEY>" \\\n` +
     `  -H "Content-Type: application/json" \\\n` +
     `  -d '{"model":"GLM-5.3-Flash","messages":[{"role":"user","content":"hi"}]}'`;
 
   return (
-    <div className="about-wrap">
-      <div className="about-card twoapi-card">
-        {/* 状态头 */}
-        <div className="x-head">
-          <span className={"x-lamp" + (running ? " on" : "")} />
-          <div>
-            <div className="x-title">2API Gateway</div>
-            <div className={"x-state" + (running ? " on" : "")}>
-              {running ? t("x.running") : t("x.stopped")}
-            </div>
-          </div>
-          <div className="x-head-actions">
-            {running
-              ? <button className="btn-ghost has-ic" disabled={busy} onClick={doStop}><Ic name="power" size={14} /> {t("x.stop")}</button>
-              : <button className="btn-primary has-ic" disabled={busy} onClick={doStart}><Ic name="play" size={14} /> {t("x.start")}</button>}
-          </div>
+    <>
+      <header className="topbar">
+        <div className="wordmark">
+          Gateway{status ? <span className="ver">: {running ? t("x.running") : t("x.stopped")}</span> : null}
+        </div>
+        <div className="top-status">
+          <span className={"status-dot " + (running ? "run" : "off")} />
+          <span className="status-text">{running ? t("x.running") : t("x.stopped")}</span>
+        </div>
+      </header>
+      <section className="toolbar">
+        {running
+          ? <button className="btn-ghost has-ic" disabled={busy} onClick={doStop}><Ic name="power" size={15} /> {t("x.stop")}</button>
+          : <button className="btn-primary has-ic" disabled={busy} onClick={doStart}><Ic name="play" size={15} /> {t("x.start")}</button>}
+        <span className="tb-spacer" />
+      </section>
+      <section className="settings open">
+        <label>{t("x.endpointLabel")}</label>
+        <div className="path-line">
+          <input className="zcode-path" type="text" value={endpoint} readOnly />
         </div>
 
-        {/* endpoint 展示行 */}
-        <div className="x-endpoint">
-          <span className="x-endpoint-label">ENDPOINT</span>
-          <code>{endpoint}</code>
+        <label style={{ marginTop: 14 }}>PORT</label>
+        <div className="path-line">
+          <input className="zcode-path" type="text" value={port}
+            onChange={(e) => setPort(e.target.value)} placeholder="8081" />
+          <button className="btn-ghost" disabled={!canSave || busy} onClick={() => guard(doSave)}>
+            {t("common.save")}
+          </button>
         </div>
 
-        {/* 配置区 */}
-        <div className="x-section">
-          <div className="x-label">{t("x.cfgLabel")}</div>
-          <div className="path-line">
-            <input className="zcode-path" type="text" value={port}
-              onChange={(e) => setPort(e.target.value)} placeholder="8081" />
-            <span className="x-field-tag">PORT</span>
-          </div>
-          <div className="path-line">
-            <input className="zcode-path" type="text" value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder={status?.apiKeyMasked || t("x.apiKeyPh")} />
-            <span className="x-field-tag">API KEY</span>
-            <button className="btn-ghost" disabled={!canSave || busy}
-              onClick={() => guard(doSave)}>{t("common.save")}</button>
-          </div>
-          {status?.apiKeyMasked
-            ? <div className="x-key-row">
-                <span className="x-key-label">{t("x.apiKeyNow")}</span>
-                <code className="x-key-val">{showKey ? "明文不出前端" : status.apiKeyMasked}</code>
-                <button className="x-key-toggle" onClick={() => setShowKey((v) => !v)}>
-                  {showKey ? t("x.hide") : t("x.show")}
-                </button>
-              </div>
-            : null}
+        <label style={{ marginTop: 14 }}>API KEY</label>
+        <div className="path-line">
+          <input className="zcode-path" type="text" value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            placeholder={status?.apiKeyMasked || t("x.apiKeyPh")} />
+          <button className="btn-ghost" disabled={!canSave || busy} onClick={() => guard(doSave)}>
+            {t("common.save")}
+          </button>
+        </div>
+        {status?.apiKeyMasked
+          ? <div className="hint" style={{ marginTop: 6 }}>{t("x.apiKeyNow")} <code>{status.apiKeyMasked}</code></div>
+          : null}
+
+        <label style={{ marginTop: 14 }}>{t("x.exampleLabel")}</label>
+        <pre className="x-curl">{curlSample}</pre>
+
+        <label style={{ marginTop: 14 }}>{t("x.logLabel")}</label>
+        <div className="x-log-empty">
+          <Ic name="empty" size={18} />
+          <span>{t("x.logEmpty")}</span>
         </div>
 
-        {/* curl 示例 */}
-        <div className="x-section">
-          <div className="x-label">{t("x.exampleLabel")}</div>
-          <pre className="x-curl">{curlSample}</pre>
-        </div>
-
-        {/* 日志空态（M5 接数据源后替换为真实日志列表） */}
-        <div className="x-section">
-          <div className="x-label">{t("x.logLabel")}</div>
-          <div className="x-log-empty">
-            <Ic name="empty" size={18} />
-            <span>{t("x.logEmpty")}</span>
-          </div>
-        </div>
-
-        {err ? <div className="x-err">{err}</div> : null}
-      </div>
-    </div>
+        <div className="hint">{t("x.endpointDesc")}</div>
+        {err ? <div className="hint" style={{ color: "var(--red)" }}>{err}</div> : null}
+      </section>
+    </>
   );
 }

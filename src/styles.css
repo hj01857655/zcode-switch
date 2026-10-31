@@ -1190,12 +1190,12 @@ input:focus-visible,
   line-height: 1.6;
 }
 
-/* ---- 2API 页 ---- */
+/* ---- Gateway 页 ---- */
 .gateway-card .about-ver.on { color: var(--mint); }
 .gateway-actions { display: flex; gap: 10px; }
 .gateway-actions .btn-primary { flex: 1; justify-content: center; }
 
-/* ---- 2API 面板 v2：状态头 / endpoint 行 / curl / 日志空态 ---- */
+/* ---- Gateway 面板 v2：状态头 / endpoint 行 / curl / 日志空态 ---- */
 .x-head {
   display: flex;
   align-items: center;
