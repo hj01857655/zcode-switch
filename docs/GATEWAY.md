@@ -2,7 +2,7 @@
 
 > 目标：在 zcode-switch（Tauri）内嵌 OpenAI/Anthropic 兼容反代，复用本工具现成的多号凭据体系，替代旁挂 `ZCode2api-go` 独立进程。
 > 参考实现：`ZCode2api-go`（Go，~2.6k 行，协议已验证）。本文是其 Rust 翻译的设计与分解。
-> 状态：**设计稿，未开工**。UI 骨架已落（`views/gateway.jsx`，commit `2183856`）。
+> 状态：**M1 已落地，M2（/v1/messages 直通）已实现、未 e2e**（2026-10-31：`src-tauri/src/gateway/` mod/server/translate/upstream/config 共 530 行；UI 骨架 `views/gateway.jsx`，commit `2183856`）。
 
 ## 0. 一页结论
 
@@ -48,6 +48,7 @@ Go 版对应物：`server.go`（路由+鉴权）、`anthropic.go`（222 行）�
 | 429 | 60 s（限流/额度） |
 | 405 / body 含 3012 | 10 min（风控） |
 | 3008/3009/3010 | 60 s（并发上限） |
+| 3007（captcha verify failed） | 0（直接返回不换号；upstream.rs 现状落「其他」档。当前靠服务端 `skip_model_request:true` 不会出现；若豁免翻 false 即确定性拒绝，固定 JWT 无限重打有指纹风险——届时改冷却或接取票，见 §6.3） |
 | 其他 | 0（直接返回，不换号） |
 
 策略：失败换下一号，冷却期内跳过；全部耗尽回 503。`window_test.go` 里有窗口调度测试，Rust 版同构。
@@ -95,7 +96,8 @@ src-tauri/src/gateway/
 
 ## 6. 风险与前置
 
-1. **前缀快照漂移**（✅ 已验证，2026-10-31）：3.16.3 → 3.17.1 **漂移实锤**——2 段 2355c → 3 段 4799c，seg0 措辞变（"coding agent" → "agent"），seg1 整段重写，新增 seg2（333c 风格指引）。3.17.1 版已提取至 `src-tauri/src/gateway/assets/prefix.json`，M2 直接嵌入使用。ZCode 后续大版本升级需重新提取（来源：本机 `~/.zcode/cli/rollout/model-io-*.jsonl` 的 system 块）。
+1. **前缀快照漂移（✅ 已验证 + 已定性，2026-10-31）**：3.16.3 → 3.17.1 system 前缀漂移实锤（2 段 2355c → 3 段 4799c，seg0 措辞变、seg1 重写、新增 seg2）。但**服务端白名单不认 3.17.1 新前缀**——实测对照：主线前缀（2 段 2355c）200 出话；3.17.1 新提取前缀 405/3012。**结论：白名单仍锚定 3.16.3 主线，gateway 内嵌主线前缀**（`src-tauri/src/gateway/assets/prefix.json`）。主线失效（3012）才需要重新校准，勿提前换新前缀。
 2. **SSE 转换正确性**：三种客户端方言的流式事件差异（`[DONE]` vs events vs message_stop），需逐客户端实测。
 3. **验证码管道存在、当前豁免（2026-10-31 反编译+实测定案）**：官方客户端在 start-plan 模式（`access.type===zhipu-account && access.mode===start-plan`）下，每次模型请求前会按 `client/configs` 的 `captcha` 配置解无痕验证码，把 `X-Aliyun-Captcha-Verify-Param/-Region` 作为 runtime headers 附到 messages 请求上（`send_preflight` 主动 + `captcha-retry` 被挑战后重试两源）。但当前服务端配置 `skip_model_request: true`（2026-10-31 实拉 client/configs），LOt 走豁免分支返回空 headers——今天的 chat 就是 Bearer + 版本头裸打。该豁免是服务端一行遥控配置：反代侧留一个探测点，定期拉 `client/configs` 读 `captcha.skip_model_request`，翻 false 时报警（届时接入 captcha_solve.js 同款无痕取票逻辑挂进 messages 头）。在那之前：429/3012 不验证码，靠池冷却规避；出现 3007 类交互要求直接回错误。
 4. **Tauri 常驻线程与打包**：axum 在 Tauri runtime 里跑 tokio，注意端口占用冲突检测（与 dev 的 5173、zclaim 的 7861 错开）。
+5. **头集薄于官方实录，本仓未独立 e2e（2026-10-31 对照审查）**：`upstream.rs:21` 只发 Bearer + `anthropic-version` + UA；官方 model-io 实录另有 `x-zcode-app-version`/`x-release-channel`/`x-client-language`/`x-platform`/`x-os-category`/`x-request-id` 等版本头族（[plan-08 §2](../../docs/zcode-plan-08-聊天对话接口.md)，quota.rs 的 `zai_billing_headers` 已有现成实现可复用）。UA 发的 `ZCode/3.17.1 ai-sdk/anthropic/3.0.81` 既非桌面形态（裸 `ZCode/3.17.1`，host 组装）也非 CLI 形态（`ai-sdk/provider-utils/… runtime/node.js/22`）。手搓最小头集实测 405+3012 被 WAF 拒（2026-10-31），本仓这套薄头集能否过闸押注在「Go 版 client.go 同款头集已跑通」这条间接证据上——M2 首发真实出话前先补版本头族再验。另有一处形状差异：`translate.rs:58` 注入的 system 前缀块无 `cache_control`（对齐 Go 版有意省略），官方 body 逐块带 `{"type":"ephemeral"}`（plan-08 §4）。
