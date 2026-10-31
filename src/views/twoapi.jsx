@@ -7,7 +7,7 @@ import { t } from "../lib/i18n.js";
 import { Ic } from "../components/iconsx.jsx";
 
 export default function TwoApiPage() {
-  const [status, setStatus] = useState<Status | null>(null);
+  const [status, setStatus] = useState(null);
   const [port, setPort] = useState("8081");
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
