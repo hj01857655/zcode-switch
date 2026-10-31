@@ -52,7 +52,7 @@ CLI 密码（export / import）：优先环境变量 `ZSW_PASSWORD`（不出现�
 
 ## 开发文档
 
-- [客户端版本头策略](docs/APP-VERSION.md)——全部通道跟随本机 ZCode 版本（注册表探测）；billing 链版本不敏感（2026-10-31 实测 3.17.1 十二号 claim 零 3012），marketing/touch 必须真实版本（老版本头回空投放）
+- [客户端版本头策略](docs/APP-VERSION.md)——全部通道跟随本机 ZCode 版本（注册表探测）；billing 链版本不敏感（2026-10-31 实测 3.17.1 连续 12 号 claim 零 3012），marketing/touch 必须真实版本（老版本头回空投放）
 
 ## 构建
 

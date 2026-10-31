@@ -259,8 +259,8 @@ pub fn preview_plans(
 
 /// 营销触点投放：`deliveries[].banner.buttons[].action.type == "claim_zcode_plan"`
 /// 才是「该号当前可领」的权威信号（实测 preview 恒空，五个已领到的号也一样空）。
-/// 此端点对 app_version 敏感——老版本头返回空 deliveries，必须走真实客户端版本头，
-/// 不能复用领取通道钉死的 3.14.0。投放按 mid + 账号双重分配，mid 用该号自己的。
+/// 此端点对 app_version 敏感——老版本头（如 3.14.0）实测返回空 deliveries，必须走真实客户端版本头。
+/// 投放按 mid + 账号双重分配，mid 用该号自己的。
 fn touch_plans(token: &str, mid: Option<String>) -> Vec<ClaimPlan> {
     let url = format!(
         "{MARKETING_TOUCH_URL}?seq=1&app_version={}&platform={}",
