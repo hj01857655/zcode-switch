@@ -1,5 +1,5 @@
 // App.jsx — 渲染层根组件。class 名与 DOM 层级保持与原 innerHTML 模板一致，CSS 无需改动。
-import { useEffect, useRef, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { Ic } from "./iconsx.jsx";
 import { t } from "./i18n.js";
 import {
@@ -8,13 +8,14 @@ import {
 } from "./store.js";
 import { expireInfo, tierBadges } from "./quotaView.js";
 import { AccountQuotaSlot, TierBadges } from "./QuotaView.jsx";
+import SettingsPage from "./settings.jsx";
 
 function useStore() {
   useSyncExternalStore(subscribe, getVersion, getVersion);
   return store;
 }
 
-function TopBar({ s, unsaved }) {
+function SideNav({ view, setView, s, unsaved }) {
   const dotCls = s.zcode_running ? "run" : s.live_logged_in ? "" : "off";
   const statusText = s.zcode_running
     ? t("m.status.running")
@@ -22,15 +23,28 @@ function TopBar({ s, unsaved }) {
       ? unsaved ? t("m.status.unsaved") : t("m.status.safe")
       : t("m.status.loggedOut");
   return (
-    <header className="topbar">
-      <div className="wordmark">
+    <aside className="sidenav">
+      <div className="side-logo">
         Z·SWITCH{store.appVer ? <span className="ver">v{store.appVer}</span> : null}
       </div>
-      <div className={"top-status" + (unsaved ? " unsaved" : "")}>
+      <button
+        className={"side-item" + (view === "accounts" ? " on" : "")}
+        onClick={() => setView("accounts")}
+      >
+        <Ic name="list" size={16} /> {t("m.accounts")}
+      </button>
+      <button
+        className={"side-item" + (view === "settings" ? " on" : "")}
+        onClick={() => setView("settings")}
+      >
+        <Ic name="sliders" size={16} /> {t("common.settings")}
+      </button>
+      <div className="side-spacer" />
+      <div className="side-foot">
         <span className={"status-dot " + dotCls} />
         <span className="status-text">{statusText}</span>
       </div>
-    </header>
+    </aside>
   );
 }
 
@@ -105,14 +119,6 @@ function Toolbar({ s, active, unsaved, claimableCount }) {
       )}
 
       <span className="tb-spacer" />
-      <button
-        className="btn-ghost tb-gear has-ic"
-        onClick={() => actions.openSettings()}
-        aria-label={t("common.settings")}
-        title={t("common.settings")}
-      >
-        <Ic name="sliders" size={16} />
-      </button>
     </section>
   );
 }
@@ -237,8 +243,23 @@ export default function App() {
   const s = useStore();
   const listRef = useRef(null);
   const scrollCapRef = useRef(null);
+  const [view, setView] = useState("accounts");
 
   useEffect(() => { boot(); }, []);
+
+  // 滚动保活必须在所有提前 return 之前声明（Rules of Hooks）
+  useEffect(() => {
+    const cap = scrollCapRef.current;
+    const list = listRef.current;
+    if (!cap || !list) return;
+    const row = list.querySelector(`.row[data-id="${CSS.escape(cap.id)}"]`);
+    if (row) {
+      const delta = row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+      list.scrollTop = delta - cap.offset;
+    } else {
+      list.scrollTop = cap.scrollTop;
+    }
+  });
 
   if (store.bootError) {
     return <div className="loading" style={{ color: "var(--red)" }}>{t("common.loadFail", { e: store.bootError })}</div>;
@@ -266,38 +287,33 @@ export default function App() {
   };
   scrollCapRef.current = captureScroll();
 
-  useEffect(() => {
-    const cap = scrollCapRef.current;
-    const list = listRef.current;
-    if (!cap || !list) return;
-    const row = list.querySelector(`.row[data-id="${CSS.escape(cap.id)}"]`);
-    if (row) {
-      const delta = row.getBoundingClientRect().top - list.getBoundingClientRect().top;
-      list.scrollTop = delta - cap.offset;
-    } else {
-      list.scrollTop = cap.scrollTop;
-    }
-  });
-
   return (
-    <>
-      <TopBar s={st} unsaved={unsaved} />
-      <Toolbar s={st} active={active} unsaved={unsaved} claimableCount={claimableCount} />
-      <div className="section-head">
-        <h2>{t("m.accounts")}</h2>
-        <span className="count">{t("m.count", { count: st.accounts.length })}</span>
+    <div className="shell">
+      <SideNav view={view} setView={setView} s={st} unsaved={unsaved} />
+      <div className="content">
+        {view === "accounts" ? (
+          <>
+            <Toolbar s={st} active={active} unsaved={unsaved} claimableCount={claimableCount} />
+            <div className="section-head">
+              <h2>{t("m.accounts")}</h2>
+              <span className="count">{t("m.count", { count: st.accounts.length })}</span>
+            </div>
+            <main className="list" ref={listRef}>
+              {st.accounts.length === 0 ? <EmptyState /> : st.accounts.map((a) => (
+                <AccountRow
+                  key={a.id}
+                  a={a}
+                  quota={s.acctQuota[a.id]}
+                  plan={s.claimable[a.id]?.plans?.[0] || null}
+                  claimDisabled={claimDisabled}
+                />
+              ))}
+            </main>
+          </>
+        ) : (
+          <SettingsPage embedded />
+        )}
       </div>
-      <main className="list" ref={listRef}>
-        {st.accounts.length === 0 ? <EmptyState /> : st.accounts.map((a) => (
-          <AccountRow
-            key={a.id}
-            a={a}
-            quota={s.acctQuota[a.id]}
-            plan={s.claimable[a.id]?.plans?.[0] || null}
-            claimDisabled={claimDisabled}
-          />
-        ))}
-      </main>
-    </>
+    </div>
   );
 }

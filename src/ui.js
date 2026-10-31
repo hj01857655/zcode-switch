@@ -5,6 +5,8 @@ import { t, has, errCode, stripErr } from "./i18n.js";
 document.addEventListener("contextmenu", (e) => e.preventDefault());
 
 document.addEventListener("keydown", (e) => {
+  // dev 模式放开 F12/控制台快捷键，便于调试
+  if (import.meta.env.DEV) return;
   if (e.key === "F12") e.preventDefault();
   if (e.ctrlKey && e.shiftKey && ["I", "i", "J", "j", "C", "c"].includes(e.key)) e.preventDefault();
   if (e.ctrlKey && ["u", "s"].includes(e.key.toLowerCase())) e.preventDefault();

@@ -48,6 +48,76 @@ html, body {
 }
 body.settings-win #app { overflow-y: auto; }
 
+.side-spacer { flex: 1; }
+
+.shell {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.sidenav {
+  width: 208px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 10px 12px;
+  border-right: 1px solid var(--hairline-soft);
+  background: var(--bg-2);
+}
+.side-logo {
+  font-family: var(--mono);
+  font-size: 16.5px;
+  letter-spacing: .18em;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  padding: 0 10px 14px;
+}
+.side-logo .ver {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--ink-mute);
+  letter-spacing: .08em;
+  margin-left: 6px;
+}
+.side-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  text-align: left;
+  padding: 9px 12px;
+  border-radius: 8px;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.side-item:hover { background: var(--panel); color: var(--ink); }
+.side-item.on {
+  background: var(--panel-2);
+  color: var(--amber);
+  border-color: var(--hairline);
+}
+.side-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 10px 2px;
+  border-top: 1px solid var(--hairline-soft);
+  font-size: 13.5px;
+  color: var(--ink-dim);
+}
+.side-foot .status-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.content > .settings { flex: 1; overflow-y: auto; }
+
 button {
   font-family: inherit;
   font-size: 15.5px;
