@@ -684,5 +684,5 @@ export async function boot() {
   }
 }
 
-import { dismissSplash } from "./ui.js";
+import { dismissSplash } from "../components/ui-react.jsx";
 function dismissSplashSafe() { dismissSplash(); }

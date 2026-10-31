@@ -10,6 +10,7 @@ import { expireInfo, tierBadges } from "./lib/quotaView.js";
 import { AccountQuotaSlot, TierBadges } from "./components/QuotaView.jsx";
 import SettingsPage from "./views/settings.jsx";
 import AboutPage from "./views/about.jsx";
+import TwoApiPage from "./views/twoapi.jsx";
 
 function useStore() {
   useSyncExternalStore(subscribe, getVersion, getVersion);
@@ -45,6 +46,12 @@ function SideNav({ view, setView, s, unsaved }) {
         onClick={() => setView("about")}
       >
         <Ic name="empty" size={16} /> {t("a.menuLabel")}
+      </button>
+      <button
+        className={"side-item" + (view === "twoapi" ? " on" : "")}
+        onClick={() => setView("twoapi")}
+      >
+        <Ic name="swap" size={16} /> {t("x.menuLabel")}
       </button>
       <div className="side-spacer" />
       <div className="side-foot">
@@ -305,6 +312,11 @@ export default function App() {
         {view === "about" ? (
           <div className="settings-view">
             <AboutPage />
+          </div>
+        ) : null}
+        {view === "twoapi" ? (
+          <div className="settings-view">
+            <TwoApiPage />
           </div>
         ) : null}
       </div>

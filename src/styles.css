@@ -1189,3 +1189,8 @@ input:focus-visible,
   color: var(--ink-mute);
   line-height: 1.6;
 }
+
+/* ---- 2API 页 ---- */
+.twoapi-card .about-ver.on { color: var(--mint); }
+.twoapi-actions { display: flex; gap: 10px; }
+.twoapi-actions .btn-primary { flex: 1; justify-content: center; }

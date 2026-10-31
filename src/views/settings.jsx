@@ -1,5 +1,5 @@
-// React 版设置页：嵌入主窗口（App 侧边栏）与独立路径共用，弹窗/toast 复用 ui.js，
-// ui.js 副作用（右键与快捷键屏蔽）随导入生效
+// React 版设置页：嵌入主窗口（App 侧边栏）与独立路径共用，弹窗/toast 复用 ui-react.jsx，
+// 其副作用（右键与快捷键屏蔽）随导入生效
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
