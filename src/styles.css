@@ -1191,6 +1191,6 @@ input:focus-visible,
 }
 
 /* ---- 2API 页 ---- */
-.twoapi-card .about-ver.on { color: var(--mint); }
-.twoapi-actions { display: flex; gap: 10px; }
-.twoapi-actions .btn-primary { flex: 1; justify-content: center; }
+.gateway-card .about-ver.on { color: var(--mint); }
+.gateway-actions { display: flex; gap: 10px; }
+.gateway-actions .btn-primary { flex: 1; justify-content: center; }

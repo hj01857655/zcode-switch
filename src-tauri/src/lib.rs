@@ -7,7 +7,7 @@ mod oauth;
 mod probe;
 mod quota;
 mod store;
-mod twoapi;
+mod gateway;
 mod zcrypto;
 
 use serde_json::{json, Value};
@@ -1144,7 +1144,7 @@ async fn open_external(url: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(twoapi::TwoApiState::new())
+        .manage(gateway::GatewayState::new())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
@@ -1188,9 +1188,9 @@ pub fn run() {
             launch_zcode,
             open_external,
             reveal_main,
-            twoapi_start,
-            twoapi_stop,
-            twoapi_status,
+            gateway_start,
+            gateway_stop,
+            gateway_status,
         ]))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1237,15 +1237,15 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-// ---- TWOAPI IPC 命令（M1） ----
+// ---- GATEWAY IPC 命令（M1） ----
 
 #[tauri::command]
-async fn twoapi_start(
+async fn gateway_start(
     app: tauri::AppHandle,
     port: Option<u16>,
     api_key: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let state = app.state::<twoapi::TwoApiState>();
+    let state = app.state::<gateway::GatewayState>();
     // 配置更新：只在提供字段时改写（表单保存语义）
     {
         let mut cfg = state.config.lock().map_err(|e| e.to_string())?;
@@ -1257,15 +1257,15 @@ async fn twoapi_start(
 }
 
 #[tauri::command]
-async fn twoapi_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let state = app.state::<twoapi::TwoApiState>();
+async fn gateway_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let state = app.state::<gateway::GatewayState>();
     let stopped = state.stop()?;
     Ok(json!({ "running": state.is_running(), "stopped": stopped }))
 }
 
 #[tauri::command]
-async fn twoapi_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
-    let state = app.state::<twoapi::TwoApiState>();
+async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let state = app.state::<gateway::GatewayState>();
     let cfg = state.config.lock().map_err(|e| e.to_string())?.clone();
     Ok(json!({
         "running": state.is_running(),

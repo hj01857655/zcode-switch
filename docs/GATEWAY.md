@@ -1,8 +1,8 @@
-# TWOAPI — Rust 版 2API 设计文档
+# GATEWAY — Rust 版 2API 设计文档
 
 > 目标：在 zcode-switch（Tauri）内嵌 OpenAI/Anthropic 兼容反代，复用本工具现成的多号凭据体系，替代旁挂 `ZCode2api-go` 独立进程。
 > 参考实现：`ZCode2api-go`（Go，~2.6k 行，协议已验证）。本文是其 Rust 翻译的设计与分解。
-> 状态：**设计稿，未开工**。UI 骨架已落（`views/twoapi.jsx`，commit `2183856`）。
+> 状态：**设计稿，未开工**。UI 骨架已落（`views/gateway.jsx`，commit `2183856`）。
 
 ## 0. 一页结论
 
@@ -24,9 +24,9 @@ Go 版对应物：`server.go`（路由+鉴权）、`anthropic.go`（222 行）�
 
 ```
 ┌─ zcode-switch (Tauri) ─────────────────────────────┐
-│  Webview UI ──(start/stop/status IPC)──► TwoApiCtl │
+│  Webview UI ──(start/stop/status IPC)──► GatewayCtl │
 │                                        │           │
-│  [twoapi 模块, 独立线程]                ▼           │
+│  [gateway 模块, 独立线程]                ▼           │
 │   axum listener (可配端口)                        │
 │    ├─ /v1/chat/completions ─┐                     │
 │    ├─ /v1/responses ────────┼─► translate ───────┼──► zcode.z.ai
@@ -55,30 +55,30 @@ Go 版对应物：`server.go`（路由+鉴权）、`anthropic.go`（222 行）�
 ## 4. 模块分解（Rust 侧新增）
 
 ```
-src-tauri/src/twoapi/
-  mod.rs        — TwoApiCtl：启停线程、状态共享（AtomicBool + 端口/密钥配置）
+src-tauri/src/gateway/
+  mod.rs        — GatewayCtl：启停线程、状态共享（AtomicBool + 端口/密钥配置）
   server.rs     — axum 路由 + Bearer 鉴权 + health
   translate.rs  — 三协议 ⇄ anthropic（请求/响应/SSE 双向）
   pool.rs       — 多号轮询 + 冷却（读 store 凭据）
   upstream.rs   — z.ai messages 客户端（reqwest + SSE 流式解析）
 ```
 
-依赖新增：`axum`（或 tiny-http + 手路由）、`tokio`（Tauri 已带）、`reqwest` stream。IPC 命令：`twoapi_start` / `twoapi_stop` / `twoapi_status`，配置落 `~/.zcode-switch/twoapi.json`（端口、sk-… 密钥）。
+依赖新增：`axum`（或 tiny-http + 手路由）、`tokio`（Tauri 已带）、`reqwest` stream。IPC 命令：`gateway_start` / `gateway_stop` / `gateway_status`，配置落 `~/.zcode-switch/gateway.json`（端口、sk-… 密钥）。
 
-## 4b. 前端设计（已落骨架：`views/twoapi.jsx`，commit `2183856`）
+## 4b. 前端设计（已落骨架：`views/gateway.jsx`，commit `2183856`）
 
-控制面板复用关于页的居中卡片视觉（`.about-card.twoapi-card`），自上而下四段：
+控制面板复用关于页的居中卡片视觉（`.about-card.gateway-card`），自上而下四段：
 
 1. **品牌行**：`2API` 大字 mono + 状态徽标（`已停止` 灰 / `运行中` mint 绿，随状态轮询变色）
 2. **端点说明块**：一句话说明 OpenAI 兼容形态与上游调用方式
-3. **配置表单 ×2**：端口输入（默认 8081）、API 密钥输入（调用方鉴权），各带保存按钮——当前 disabled，接 `twoapi_status` 后按「配置与运行态一致才可改」的规则启用
-4. **启停按钮行**：`启动服务` / `停止服务` 互斥 disabled（运行中只亮停止），接 `twoapi_start/stop`
+3. **配置表单 ×2**：端口输入（默认 8081）、API 密钥输入（调用方鉴权），各带保存按钮——当前 disabled，接 `gateway_status` 后按「配置与运行态一致才可改」的规则启用
+4. **启停按钮行**：`启动服务` / `停止服务` 互斥 disabled（运行中只亮停止），接 `gateway_start/stop`
 
 **待接状态设计**（M1 接线时的完整面板）：
 
-- `twoapi_status` 轮询（1s）：`running / port / uptime / requests_total / errors_total / active_accounts`
+- `gateway_status` 轮询（1s）：`running / port / uptime / requests_total / errors_total / active_accounts`
 - 状态灯三态扩展：`starting`（琥珀）/ `running`（mint）/ `error`（red，附最近错误）
-- 新增**请求日志块**（最近 N 条：时间、端点、账号、状态码、耗时），由 `twoapi_status` 附带最近事件环
+- 新增**请求日志块**（最近 N 条：时间、端点、账号、状态码、耗时），由 `gateway_status` 附带最近事件环
 - 多号池可视化：每号一行（名称 + 状态点 + 今日请求数 + 冷却剩余秒），数据从 pool 状态取
 - 保存按钮启用规则：表单值 ≠ 持久值且服务未运行时才可点；运行中改配置需先停止（避免热改端口/密钥的不一致窗口）
 - 样式约束：沿用 panel/hairline/amber/mint 主题变量，不新增配色；表单行复用 `.path-line`；全部文案走 `x.*` i18n 键（zh/en 同步）
@@ -95,7 +95,7 @@ src-tauri/src/twoapi/
 
 ## 6. 风险与前置
 
-1. **前缀快照漂移**（最大项）：`prefix.json` 提取自 3.16.3；3.17.1 的 system 前缀是否变化未验证。M2 前必须先做一次提取比对（Go 版 `SystemPrefix()` 的提取流程有文档）。
+1. **前缀快照漂移**（✅ 已验证，2026-10-31）：3.16.3 → 3.17.1 **漂移实锤**——2 段 2355c → 3 段 4799c，seg0 措辞变（"coding agent" → "agent"），seg1 整段重写，新增 seg2（333c 风格指引）。3.17.1 版已提取至 `src-tauri/src/gateway/assets/prefix.json`，M2 直接嵌入使用。ZCode 后续大版本升级需重新提取（来源：本机 `~/.zcode/cli/rollout/model-io-*.jsonl` 的 system 块）。
 2. **SSE 转换正确性**：三种客户端方言的流式事件差异（`[DONE]` vs events vs message_stop），需逐客户端实测。
-3. **与 claim 共用 captcha**：上游 429/3012 时反代侧不验证码，靠池冷却规避；出现 3007 类交互要求直接回错误。
+3. **验证码管道存在、当前豁免（2026-10-31 反编译+实测定案）**：官方客户端在 start-plan 模式（`access.type===zhipu-account && access.mode===start-plan`）下，每次模型请求前会按 `client/configs` 的 `captcha` 配置解无痕验证码，把 `X-Aliyun-Captcha-Verify-Param/-Region` 作为 runtime headers 附到 messages 请求上（`send_preflight` 主动 + `captcha-retry` 被挑战后重试两源）。但当前服务端配置 `skip_model_request: true`（2026-10-31 实拉 client/configs），LOt 走豁免分支返回空 headers——今天的 chat 就是 Bearer + 版本头裸打。该豁免是服务端一行遥控配置：反代侧留一个探测点，定期拉 `client/configs` 读 `captcha.skip_model_request`，翻 false 时报警（届时接入 captcha_solve.js 同款无痕取票逻辑挂进 messages 头）。在那之前：429/3012 不验证码，靠池冷却规避；出现 3007 类交互要求直接回错误。
 4. **Tauri 常驻线程与打包**：axum 在 Tauri runtime 里跑 tokio，注意端口占用冲突检测（与 dev 的 5173、zclaim 的 7861 错开）。

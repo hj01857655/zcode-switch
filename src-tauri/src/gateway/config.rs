@@ -1,15 +1,15 @@
-// TWOAPI 配置：端口、调用方鉴权密钥，落 ~/.zcode-switch/twoapi.json
+// GATEWAY 配置：端口、调用方鉴权密钥，落 ~/.zcode-switch/gateway.json
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TwoApiConfig {
+pub struct GatewayConfig {
     pub port: u16,
     #[serde(default)]
     pub api_key: String,
 }
 
-impl Default for TwoApiConfig {
+impl Default for GatewayConfig {
     fn default() -> Self {
         // 密钥默认自动生成（sk- + 32 hex），首次落盘后固定
         Self {
@@ -19,9 +19,9 @@ impl Default for TwoApiConfig {
     }
 }
 
-impl TwoApiConfig {
+impl GatewayConfig {
     fn path() -> PathBuf {
-        crate::Paths::detect().home.join("twoapi.json")
+        crate::Paths::detect().home.join("gateway.json")
     }
 
     pub fn load() -> Self {

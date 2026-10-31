@@ -99,7 +99,7 @@ pub fn failure_payload(
     })
 }
 
-fn claim_token(creds: &Value, config: Option<&Value>, secret: &str) -> Result<String, String> {
+pub(crate) fn claim_token(creds: &Value, config: Option<&Value>, secret: &str) -> Result<String, String> {
     let jwt = creds
         .get("zcodejwttoken")
         .and_then(|v| v.as_str())
