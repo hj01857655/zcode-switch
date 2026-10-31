@@ -52,7 +52,7 @@ The embedded pages (such as the login page) are rendered by the system WebView, 
 
 ## Developer Docs
 
-- [Client version-header strategy](docs/APP-VERSION.md) — model/quota/OAuth channels follow the locally installed ZCode version; the claim channel is pinned to 3.14.0 (avoids upstream 3012 risk control)
+- [Client version-header strategy](docs/APP-VERSION.md) — model/quota/OAuth and marketing-touch channels follow the locally installed ZCode version; the billing/claim channel is pinned to 3.14.0 (avoids upstream 3012 risk control)
 
 ## Build
 

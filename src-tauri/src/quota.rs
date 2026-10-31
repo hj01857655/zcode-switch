@@ -22,10 +22,9 @@ pub const SUBSCRIPTION_URL: &str = "https://open.bigmodel.cn/api/biz/subscriptio
 pub const BILLING_BALANCE_URL: &str = "https://zcode.z.ai/api/v1/zcode-plan/billing/balance";
 pub const CLIENT_APP_VERSION: &str = "3.17.1";
 
-/// 领取通道（billing/preview、billing/claim）固定版本：实测换成更高版本会触发 3012 风控，
-/// 与模型/额度通道的探测版本分开。版本策略总表见仓库 docs/APP-VERSION.md，
-/// 协议证据见 ZCode2api-go/docs/CLAIM.md。
-pub const CLAIM_APP_VERSION: &str = "3.14.0";
+/// 领取通道版本：曾固定 3.14.0（生态流传防 3012），2026-10-31 实测推翻——
+/// 3.17.1 的头+URL 直打 billing/claim 连续 12 次成功零 3012，版本不敏感。
+/// billing 全链与 touch 统一走探测版本（zcode_app_version），不再保留专用常量。
 
 pub(crate) fn client_platform() -> String {
     let os = crate::zcrypto::node_platform_for(std::env::consts::OS);
@@ -193,10 +192,6 @@ pub(crate) fn zai_billing_headers(token: &str) -> Vec<(String, String)> {
 
 pub(crate) fn zai_billing_headers_with_mid(token: &str, mid: Option<String>) -> Vec<(String, String)> {
     zai_headers_with_version(zcode_app_version(), token, mid)
-}
-
-pub(crate) fn zai_claim_headers_with_mid(token: &str, mid: Option<String>) -> Vec<(String, String)> {
-    zai_headers_with_version(CLAIM_APP_VERSION.to_string(), token, mid)
 }
 
 pub(crate) struct OAuthFlowHeaders(pub Vec<(String, String)>);

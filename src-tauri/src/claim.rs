@@ -372,7 +372,7 @@ fn http_err(prefix: &str, e: ureq::Error) -> String {
 
 fn preview_once(url: &str, token: &str, mid: Option<String>) -> Result<Vec<ClaimPlan>, String> {
     let mut req = agent().get(url);
-    for (k, v) in quota::zai_claim_headers_with_mid(token, mid) {
+    for (k, v) in quota::zai_billing_headers_with_mid(token, mid) {
         req = req.set(&k, &v);
     }
     let resp = req
@@ -410,7 +410,7 @@ pub fn submit_claim(
     let secret = zcrypto::default_secret(home);
     let token = claim_token(creds, config, &secret)?;
     let mut req = agent().post(BILLING_CLAIM_URL);
-    for (k, v) in quota::zai_claim_headers_with_mid(&token, device_mid) {
+    for (k, v) in quota::zai_billing_headers_with_mid(&token, device_mid) {
         req = req.set(&k, &v);
     }
     req = req.set("X-Aliyun-Captcha-Verify-Param", captcha_param.trim());
