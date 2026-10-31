@@ -108,4 +108,10 @@ src-tauri/src/gateway/
 
    **敏感性定案（M3-E，2026-10-31）**：Python 同构复刻仅带 `Authorization: Bearer` + `Content-Type` 两条头（无 UA、无版本头族）、system 无 `cache_control`、`metadata.user_id` 用 JSON 内嵌串——全部真实 200 出话。结论：①头集不是 3012 的胜负手（10-31 那次手搓 405+3012 真因在 body，当时前缀块未对齐）；②`cache_control` 形状服务端不校验；③`metadata.user_id` JSON 串形状被接受（Go 版对照存疑项关闭）。版本头族保留为保真项（更贴官方客户端，无副作用）；`X-Device-Mid` 取全局 live mid 而非账号 virtual mid，对 messages 的实际影响未单独验证（池化多号下建议后续跟号走）。
 
-   **⚠️ 新头集首打 3012（2026-10-31 23:5x，`scripts/farm_probe.py`）**：完整新链路单发即撞 405/3012——头族全开（`ZCode/3.17.1` UA + 版本头族 + `X-Device-Mid`=账号 virtual mid）+ 前缀块带 `cache_control` + 农场号 AaronWallace42。探针按全局风控档正确停手，未换号重试。与 M3-E 薄头集 200 的差异变量并存，**单变量归因未做**（当日 3012 纪律禁止连环试），候选：①版本头族本身（注册表探测给 3.17.1，而主线白名单锚 3.16.3 时代，版本头与白名单前缀错位可能被判）；②`X-Device-Mid` 用账号 virtual mid（JWT 与 live 设备绑定关系存疑，M3-E 未发此头）；③账号差异（M3-E 走 live 号）。后续 bisect 顺序建议：live 号+全头族 → farm 号+live mid → 逐头削减。farm_send 的全局退避行为与本次探针停手逻辑一致，网关在归因完成前**不要带 full 头族上真实流量**。
+   **⚠️ 新头集首打 3012（2026-10-31 23:5x，`scripts/farm_probe.py`）**：完整新链路单发即撞 405/3012——头族全开（`ZCode/3.17.1` UA + 版本头族 + `X-Device-Mid`=账号 virtual mid）+ 前缀块带 `cache_control` + 农场号 AaronWallace42。探针按全局风控档正确停手，未换号重试。与 M3-E 薄头集 200 逐项对差的结论：
+
+   - **头号嫌疑 = UA/TLS 指纹矛盾**：M3-E 用裸 `Python-urllib` UA 过了，我自称 `ZCode/3.17.1` 被拒——声称 Electron 客户端但 TLS 指纹（JA3）是 Python 的，bot 判定正打这种「装得像但握手露馅」；明摆着非客户端的请求反而走普通鉴权路径放行。
+   - **战略修正**：Rust 侧 reqwest+rustls 同样非 Chromium 指纹，「头族对齐官方」对 messages 可能整体是负资产；**M3-E 薄头集（Authorization + Content-Type）才是已验证 200 的形态**。归因完成前 gateway 默认薄头，版本头族退为实验开关。
+   - 次级候选（未排除）：`X-Device-Mid` virtual mid 与账号绑定关系、farm 新号本 IP 首发-messages、`cache_control`（低嫌疑——官方 body 本就带，plan-08 §4）。
+   - **M3-E「结论①头集不是胜负手」就此修正**：它只证了「薄头+好 body=200」，从未测全头族；本发补上「全头族+好 body=3012」。
+   - bisect 一发定乾坤（明日，遵守 3012 当日停手）：**live 号 + 全头族**——3012 ⇒ 头族实锤（gateway 定薄头）；200 ⇒ 头族无罪，嫌疑收敛到账号/virtual mid。
