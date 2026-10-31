@@ -242,24 +242,17 @@ function EmptyState() {
 export default function App() {
   const s = useStore();
   const listRef = useRef(null);
-  const scrollCapRef = useRef(null);
   const [view, setView] = useState("accounts");
+  // 设置页首次打开后保活，避免每次切换都重跑 get_state 等 IPC 造成卡顿
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  if (view === "settings" && !settingsLoaded) setSettingsLoaded(true);
 
   useEffect(() => { boot(); }, []);
 
-  // 滚动保活必须在所有提前 return 之前声明（Rules of Hooks）
-  useEffect(() => {
-    const cap = scrollCapRef.current;
-    const list = listRef.current;
-    if (!cap || !list) return;
-    const row = list.querySelector(`.row[data-id="${CSS.escape(cap.id)}"]`);
-    if (row) {
-      const delta = row.getBoundingClientRect().top - list.getBoundingClientRect().top;
-      list.scrollTop = delta - cap.offset;
-    } else {
-      list.scrollTop = cap.scrollTop;
-    }
-  });
+  // 滚动保活：React 只更新变化的文本节点，.list 元素不重建，
+  // Chromium 原生 scroll anchoring 自动保住滚动位置。
+  // 原生 JS innerHTML 时代的手动锚点补偿在此是双重叠加——
+  // 额度槽塌缩（行高骤减）时会算出负偏移被浏览器钳到顶部，即「自动回顶」，故整体移除。
 
   if (store.bootError) {
     return <div className="loading" style={{ color: "var(--red)" }}>{t("common.loadFail", { e: store.bootError })}</div>;
@@ -272,20 +265,6 @@ export default function App() {
   const claimableCount = st.accounts.filter((a) => (s.claimable[a.id]?.plans || []).length > 0).length;
   const { claimAllRunning, refreshClaim, claimActive, autoClaimRunning } = runtimeFlags();
   const claimDisabled = claimAllRunning || refreshClaim.running || claimActive || autoClaimRunning;
-
-  // 滚动保活：重绘前记录首个可见行，绘制后复位
-  const captureScroll = () => {
-    const list = listRef.current;
-    if (!list || list.scrollTop === 0) return null;
-    const listTop = list.getBoundingClientRect().top;
-    for (const row of list.querySelectorAll(".row[data-id]")) {
-      if (row.getBoundingClientRect().bottom > listTop) {
-        return { id: row.dataset.id, offset: row.getBoundingClientRect().top - listTop, scrollTop: list.scrollTop };
-      }
-    }
-    return null;
-  };
-  scrollCapRef.current = captureScroll();
 
   return (
     <div className="shell">
@@ -310,9 +289,12 @@ export default function App() {
               ))}
             </main>
           </>
-        ) : (
-          <SettingsPage embedded />
-        )}
+        ) : null}
+        {settingsLoaded ? (
+          <div className={"settings-view" + (view === "settings" ? "" : " hidden")}>
+            <SettingsPage embedded initialState={st} />
+          </div>
+        ) : null}
       </div>
     </div>
   );
