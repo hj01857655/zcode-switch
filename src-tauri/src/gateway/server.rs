@@ -1,8 +1,9 @@
 // GATEWAY HTTP 服务：axum 路由 + Bearer 鉴权 + health + /v1/models 静态列表
-// M1 范围：能起能停能鉴权；chat/responses/messages 转换器 M2-M4 接入。
+// M2-M3：/v1/messages 直通聚合；/v1/chat/completions OpenAI 转换（非流式聚合 + SSE 流式）。
+use axum::body::Body;
 use axum::extract::State;
-use axum::http::{HeaderMap, StatusCode};
-use axum::response::Json;
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use serde_json::{json, Value};
 use tokio::sync::watch;
@@ -22,7 +23,7 @@ pub async fn serve(addr: std::net::SocketAddr, api_key: String, mut shutdown: wa
     let app = axum::Router::new()
         .route("/health", get(health))
         .route("/v1/models", get(models))
-        .route("/v1/chat/completions", post(not_implemented))
+        .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/messages", post(messages))
         .route("/v1/responses", post(not_implemented))
         .with_state(state);
@@ -120,6 +121,81 @@ async fn messages(
     }
 }
 
+/// /v1/chat/completions（M3）：OpenAI 入站 → anthropic 上游。
+/// 非流式：上游 SSE 聚合为 chat.completion；流式：逐块转 chat.completion.chunk。入站一律转 stream=true。
+async fn chat_completions(
+    State(state): State<std::sync::Arc<SvcState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, (StatusCode, Json<Value>)> {
+    if let Err(code) = check_auth(&state, &headers) {
+        return Err((code, api_error("authentication_error", "invalid api key")));
+    }
+    let req: Value = serde_json::from_slice(&body)
+        .map_err(|e| (StatusCode::BAD_REQUEST, api_error("invalid_request_error", &e.to_string())))?;
+    let model = req
+        .get("model")
+        .and_then(|m| m.as_str())
+        .unwrap_or("GLM-5.3-Flash")
+        .to_string();
+    let stream = req.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+    let prepared = translate::openai_to_upstream(&req)
+        .map_err(|e| (StatusCode::BAD_REQUEST, api_error("invalid_request_error", &e)))?;
+    let prepared = serde_json::to_vec(&prepared).map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, api_error("api_error", &e.to_string()))
+    })?;
+    let token = match tokio::task::spawn_blocking(live_token).await {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return Err((StatusCode::SERVICE_UNAVAILABLE, api_error("api_error", &e))),
+        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, api_error("api_error", &e.to_string()))),
+    };
+    if !stream {
+        return match upstream::messages(&state.http, &token, &prepared).await {
+            Ok(bytes) => {
+                let raw = String::from_utf8_lossy(&bytes).into_owned();
+                Ok(Json(translate::aggregate_sse_to_openai(&raw, &model)).into_response())
+            }
+            Err(up) => Err((
+                StatusCode::from_u16(up.status).unwrap_or(StatusCode::BAD_GATEWAY),
+                api_error("upstream_error", &up.body),
+            )),
+        };
+    }
+
+    let resp = upstream::messages_stream(&state.http, &token, &prepared)
+        .await
+        .map_err(|up| (
+            StatusCode::from_u16(up.status).unwrap_or(StatusCode::BAD_GATEWAY),
+            api_error("upstream_error", &up.body),
+        ))?;
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(16);
+    tokio::spawn(async move {
+        let mut chunker = translate::OpenAiChunker::new(&model);
+        let mut resp = resp;
+        loop {
+            match resp.chunk().await {
+                Ok(Some(c)) => {
+                    let out = chunker.feed(&String::from_utf8_lossy(&c));
+                    if !out.is_empty() && tx.send(Ok(bytes::Bytes::from(out))).await.is_err() {
+                        break; // 客户端断开
+                    }
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    let _ = tx.send(Err(std::io::Error::other(e.to_string()))).await;
+                    break;
+                }
+            }
+        }
+        let fin = chunker.finish();
+        let _ = tx.send(Ok(bytes::Bytes::from(fin))).await;
+    });
+    let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
+    resp.headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
+    Ok(resp)
+}
+
 fn api_error(typ: &str, msg: &str) -> Json<Value> {
     Json(json!({ "error": { "type": typ, "message": msg } }))
 }
@@ -139,7 +215,7 @@ async fn not_implemented() -> (StatusCode, Json<Value>) {
     (
         StatusCode::NOT_IMPLEMENTED,
         Json(json!({
-            "error": { "message": "chat/responses/messages converters land in M2-M4", "type": "not_implemented" }
+            "error": { "message": "/v1/responses lands in M4", "type": "not_implemented" }
         })),
     )
 }

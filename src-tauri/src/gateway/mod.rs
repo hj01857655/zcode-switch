@@ -1,6 +1,7 @@
 // GATEWAY — OpenAI/Anthropic 兼容反代（M1：服务骨架 + models + 鉴权 + health）
 // 设计见 docs/GATEWAY.md。服务独立于窗口生命周期，托盘模式照常运行。
 pub mod config;
+pub mod openai;
 pub mod server;
 pub mod translate;
 pub mod upstream;

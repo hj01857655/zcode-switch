@@ -59,6 +59,35 @@ pub async fn messages(
         .map_err(|e| UpstreamError { status: 0, body: e.to_string() })
 }
 
+/// 流式版：返回原始响应体（M3/M4 SSE 逐块转发，调用侧自行解析）
+pub async fn messages_stream(
+    http: &HttpClient,
+    token: &str,
+    body: &[u8],
+) -> Result<reqwest::Response, UpstreamError> {
+    let mut req = http.post(UPSTREAM_MESSAGES);
+    for (k, v) in headers(token) {
+        req = req.header(k, v);
+    }
+    let resp = req
+        .body(body.to_vec())
+        .send()
+        .await
+        .map_err(|e| UpstreamError { status: 0, body: e.to_string() })?;
+    let status = resp.status().as_u16();
+    if status != 200 {
+        let body = resp
+            .text()
+            .await
+            .unwrap_or_default()
+            .chars()
+            .take(4096)
+            .collect();
+        return Err(UpstreamError { status, body });
+    }
+    Ok(resp)
+}
+
 /// 冷却时长（秒）：0 = 不冷却不换号。Go client.go:134 对齐。
 pub fn cooldown_secs(status: u16, body: &str) -> u64 {
     match status {
