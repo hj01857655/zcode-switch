@@ -1,5 +1,5 @@
-import { zh } from "./locales/zh.js";
-import { en } from "./locales/en.js";
+import { zh } from "../locales/zh.js";
+import { en } from "../locales/en.js";
 
 const TABLES = { zh, en };
 let LANG = "zh";

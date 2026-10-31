@@ -1,14 +1,15 @@
 // App.jsx — 渲染层根组件。class 名与 DOM 层级保持与原 innerHTML 模板一致，CSS 无需改动。
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { Ic } from "./iconsx.jsx";
-import { t } from "./i18n.js";
+import { Ic } from "./components/iconsx.jsx";
+import { t } from "./lib/i18n.js";
 import {
   store, subscribe, getVersion, boot, actions, runtimeFlags,
   notchColor, autoPillTitle, accountName,  // eslint-disable-line no-unused-vars
-} from "./store.js";
-import { expireInfo, tierBadges } from "./quotaView.js";
-import { AccountQuotaSlot, TierBadges } from "./QuotaView.jsx";
-import SettingsPage from "./settings.jsx";
+} from "./lib/store.js";
+import { expireInfo, tierBadges } from "./lib/quotaView.js";
+import { AccountQuotaSlot, TierBadges } from "./components/QuotaView.jsx";
+import SettingsPage from "./views/settings.jsx";
+import AboutPage from "./views/about.jsx";
 
 function useStore() {
   useSyncExternalStore(subscribe, getVersion, getVersion);
@@ -38,6 +39,12 @@ function SideNav({ view, setView, s, unsaved }) {
         onClick={() => setView("settings")}
       >
         <Ic name="sliders" size={16} /> {t("common.settings")}
+      </button>
+      <button
+        className={"side-item" + (view === "about" ? " on" : "")}
+        onClick={() => setView("about")}
+      >
+        <Ic name="empty" size={16} /> {t("a.menuLabel")}
       </button>
       <div className="side-spacer" />
       <div className="side-foot">
@@ -293,6 +300,11 @@ export default function App() {
         {settingsLoaded ? (
           <div className={"settings-view" + (view === "settings" ? "" : " hidden")}>
             <SettingsPage embedded initialState={st} />
+          </div>
+        ) : null}
+        {view === "about" ? (
+          <div className="settings-view">
+            <AboutPage />
           </div>
         ) : null}
       </div>

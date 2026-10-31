@@ -24,6 +24,13 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         captcha: resolve(__dirname, "captcha.html"),
       },
+      output: {
+        // vendor 分包：框架与平台 API 独立缓存，业务变更不使它们失效
+        manualChunks: {
+          react: ["react", "react-dom", "scheduler"],
+          tauri: ["@tauri-apps/api/core", "@tauri-apps/api/event"],
+        },
+      },
     },
   },
 });

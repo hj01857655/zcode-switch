@@ -1,10 +1,10 @@
 // 额度展示组件：DOM 结构与 class 名与原 innerHTML 模板逐一对应
 import { Ic } from "./iconsx.jsx";
-import { t } from "./i18n.js";
+import { t } from "../lib/i18n.js";
 import {
   fmtTokens, balLabel, expireInfo, tierChipOf, grantLabel, slotRows,
   itemKind, windowLabel, resetLabel,
-} from "./quotaView.js";
+} from "../lib/quotaView.js";
 
 // 条与文字均为「已用」语义；剩余数值由各行 rem 文本表达
 export function QuotaBar({ pct }) {

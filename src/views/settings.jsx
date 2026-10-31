@@ -3,9 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { toast, openPwModal, dismissSplash } from "./ui.js";
-import { Ic } from "./iconsx.jsx";
-import { init, t, lang, stripErr } from "./i18n.js";
+import { toast, openPwModal, dismissSplash } from "../lib/ui.js";
+import { Ic } from "../components/iconsx.jsx";
+import { init, t, lang, stripErr } from "../lib/i18n.js";
 
 function Toggle({ on, label, desc, onClick }) {
   return (
@@ -43,7 +43,6 @@ export default function SettingsPage({ embedded = false, initialState = null }) 
   // 主窗口已拉过同一份 get_state，直接作初始值，避免打开时白等一轮文件 IO
   const [state, setState] = useState(initialState);
   const [autostart, setAutostart] = useState(false);
-  const [appVer, setAppVer] = useState("");
   const [loadErr, setLoadErr] = useState("");
   const [pathInput, setPathInput] = useState("");
   const [proxyInput, setProxyInput] = useState("");
@@ -74,7 +73,6 @@ export default function SettingsPage({ embedded = false, initialState = null }) 
     const un = listen("state-changed", () => refresh().catch(() => {}));
     (async () => {
       try {
-        setAppVer((await invoke("app_version").catch(() => "")) || "");
         await refresh();
         dismissSplash();
       } catch (e) {
@@ -180,7 +178,6 @@ export default function SettingsPage({ embedded = false, initialState = null }) 
         s.auth_proxy_on ? t("s.proxySavedOn") : t("s.proxySavedOff"));
     }),
 
-    openGitHub: () => invoke("open_external", { url: "https://github.com/pjpv/zcode-switch" }),
   };
 
   return (
@@ -220,10 +217,6 @@ export default function SettingsPage({ embedded = false, initialState = null }) 
           <button className="btn-ghost" onClick={actions.savePath}>{t("common.save")}</button>
         </div>
         <div className="hint">{t("s.hint")}</div>
-        <div className="gh-row">
-          <a className="gh-link" href="https://github.com/pjpv/zcode-switch" target="_blank" rel="noopener" onClick={(e) => { e.preventDefault(); actions.openGitHub(); }}>{t("s.githubLink")}</a>
-          {appVer ? <span className="ver">v{appVer}</span> : ""}
-        </div>
       </section>
     </>
   );

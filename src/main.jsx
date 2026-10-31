@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import App from "./App.jsx";
 
 // 右键菜单与快捷键屏蔽逻辑在 ui.js 副作用里，main.js 与 React 版共用
-import "./ui.js";
+import "./lib/ui.js";
 
 const root = createRoot(document.getElementById("app"));
 root.render(

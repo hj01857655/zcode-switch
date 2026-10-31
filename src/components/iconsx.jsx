@@ -1,5 +1,5 @@
 // React 版图标组件：DOM 与 icons.js 的 ic() 输出逐属性一致
-import { iconBody } from "./icons.js";
+import { iconBody } from "../lib/icons.js";
 
 export function Ic({ name, size = 16, cls = "" }) {
   const body = iconBody(name);
