@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { toast, openPwModal, dismissSplash } from "../lib/ui.js";
+import { toast, openPwModal, dismissSplash } from "../components/ui-react.jsx";
 import { Ic } from "../components/iconsx.jsx";
 import { init, t, lang, stripErr } from "../lib/i18n.js";
 

@@ -1,0 +1,271 @@
+// React 版 UI 服务层：同签名替代 lib/ui.js（原生 DOM 拼接层）。
+// toast / 三个模态框走模块内事件总线 + createRoot 挂载的宿主组件；
+// 右键与快捷键屏蔽副作用随本模块导入生效（dev 模式放开 F12/控制台）。
+import { createRoot } from "react-dom/client";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { Ic } from "./iconsx.jsx";
+import { t, has, errCode, stripErr } from "../lib/i18n.js";
+
+document.addEventListener("contextmenu", (e) => e.preventDefault());
+
+document.addEventListener("keydown", (e) => {
+  if (import.meta.env.DEV) return;
+  if (e.key === "F12") e.preventDefault();
+  if (e.ctrlKey && e.shiftKey && ["I", "i", "J", "j", "C", "c"].includes(e.key)) e.preventDefault();
+  if (e.ctrlKey && ["u", "s"].includes(e.key.toLowerCase())) e.preventDefault();
+});
+
+export function dismissSplash() {
+  const el = document.getElementById("splash");
+  if (!el) return;
+  el.style.opacity = "0";
+  setTimeout(() => el.remove(), 220);
+}
+
+// ---- 事件总线 ----
+const ui = { toasts: [], confirm: null, pw: null, provider: null };
+let version = 0;
+let toastSeq = 0;
+const listeners = new Set();
+const subscribe = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
+const getVersion = () => version;
+function emit() { version++; listeners.forEach((fn) => fn()); }
+
+export function toast(msg, kind = "ok", detail = "") {
+  const id = ++toastSeq;
+  ui.toasts = [...ui.toasts, { id, msg: String(msg), kind, detail: detail ? String(detail) : "" }];
+  emit();
+  setTimeout(() => {
+    ui.toasts = ui.toasts.filter((x) => x.id !== id);
+    emit();
+  }, detail ? 5200 : 3200);
+}
+
+function useUi() {
+  useSyncExternalStore(subscribe, getVersion, getVersion);
+  return ui;
+}
+
+function ToastHost() {
+  const u = useUi();
+  return (
+    <div className="toast-zone">
+      {u.toasts.map((x) => (
+        <div key={x.id} className={`toast ${x.kind}`}>
+          <span className="t-ic"><Ic name={x.kind === "ok" ? "check" : "alert"} size={16} /></span>
+          <span className="t-body">{x.msg}{x.detail ? <span className="detail">{x.detail}</span> : ""}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ConfirmModal() {
+  const u = useUi();
+  const m = u.confirm;
+  const yesRef = useRef(null);
+  const noRef = useRef(null);
+  const close = () => { ui.confirm = null; emit(); };
+
+  useEffect(() => {
+    if (!m) return;
+    (m.focusNo || m.kind === "danger" ? noRef.current : yesRef.current)?.focus();
+    const key = (e) => {
+      if (e.key === "Escape") close();
+      if (e.key === "Enter" && e.target === document.body && !yesRef.current?.disabled) yesRef.current?.click();
+    };
+    document.addEventListener("keydown", key);
+    return () => document.removeEventListener("keydown", key);
+  }, [m]);
+
+  if (!m) return null;
+  const kind = m.kind || "plain";
+  return (
+    <div className="cm-mask" onClick={close}>
+      <div
+        className="cm-panel"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label={m.title}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className={`cm-strip ${kind}`}></div>
+        <div className="cm-head">
+          <span className={`cm-ic ${kind}`}><Ic name={m.icon || "alert"} size={21} /></span>
+          <div className="cm-title">{m.title}</div>
+        </div>
+        {/* desc 允许携带富文本（与原 ui.js 行为一致） */}
+        {m.desc ? <div className="cm-desc" dangerouslySetInnerHTML={{ __html: m.desc }} /> : null}
+        <div className="cm-actions">
+          <button className="btn-ghost cm-no" ref={noRef} onClick={close}>{m.noLabel || t("common.cancel")}</button>
+          <button
+            className={`cm-yes ${kind}`}
+            ref={yesRef}
+            onClick={async (e) => {
+              e.currentTarget.disabled = true;
+              if (noRef.current) noRef.current.disabled = true;
+              try { await m.onYes?.(); } finally { close(); }
+            }}
+          >
+            {m.yesLabel || t("common.confirm")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PwModal() {
+  const u = useUi();
+  const m = u.pw;
+  const [pw1, setPw1] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const input1Ref = useRef(null);
+  const close = () => { ui.pw = null; emit(); };
+
+  useEffect(() => {
+    if (!m) return;
+    setPw1(""); setPw2(""); setErr(""); setBusy(false);
+    input1Ref.current?.focus();
+  }, [m]);
+
+  if (!m) return null;
+  const isExport = m.mode === "export" || m.mode === "exportAll";
+  const title = m.mode === "export" ? t("pw.exportTitle", { name: m.name })
+    : m.mode === "exportAll" ? t("pw.exportAllTitle", { count: m.count })
+    : t("pw.importTitle", { count: m.files.length });
+  const sub = isExport
+    ? t("pw.exportSub", { path: m.path })
+    : t("pw.importSub", { files: m.files.map(([n]) => n).join(t("common.listSep")) });
+
+  async function confirm() {
+    if (pw1.length < 6) return setErr(t("pw.errMinLen"));
+    if (isExport && pw1 !== pw2) return setErr(t("pw.errMismatch"));
+    setBusy(true);
+    try {
+      if (m.mode === "export") {
+        const r = await invoke("export_finalize", { path: m.path, id: m.id, password: pw1 });
+        toast(t("pw.exportedToast", { path: r.path }), "ok", t("pw.exportedToastDetail"));
+        m.onDone?.(r);
+      } else if (m.mode === "exportAll") {
+        const r = await invoke("export_all_finalize", { path: m.path, password: pw1 });
+        toast(t("pw.exportedAllToast", { count: r.count }), "ok", r.path);
+        m.onDone?.(r);
+      } else {
+        let report = await invoke("import_sealed", { files: m.files, password: pw1 });
+        if (m.preErrors?.length) {
+          report.errors = [...m.preErrors, ...(report.errors || [])];
+        }
+        const wrongPw = (report.errors || []).some((e) => errCode(e) === "wrong_password" || String(e).includes("密码错误"));
+        if (wrongPw) { setErr(t("pw.errWrong")); setBusy(false); return; }
+        m.onDone?.(report);
+      }
+      close();
+    } catch (e) {
+      setErr(stripErr(e));
+      setBusy(false);
+    }
+  }
+
+  const onKey = (e) => {
+    if (e.key === "Escape") close();
+    if (e.key === "Enter" && !busy) confirm();
+  };
+
+  return (
+    <div className="pw-mask" onClick={close}>
+      <div className="pw-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="pw-title">{title}</div>
+        <div className="pw-sub">{sub}</div>
+        <input
+          ref={input1Ref}
+          className="pw-input" type="password" autoComplete="off"
+          placeholder={isExport ? t("pw.setPw") : t("pw.pw")}
+          value={pw1} onChange={(e) => setPw1(e.target.value)} onKeyDown={onKey}
+        />
+        {isExport ? (
+          <input
+            className="pw-input" type="password" autoComplete="off"
+            placeholder={t("pw.pwAgain")}
+            value={pw2} onChange={(e) => setPw2(e.target.value)} onKeyDown={onKey}
+          />
+        ) : null}
+        <div className="pw-err">{err}</div>
+        <div className="pw-actions">
+          <button className="btn-ghost pw-cancel" onClick={close}>{t("common.cancel")}</button>
+          <button className="btn-primary pw-go has-ic" disabled={busy} onClick={confirm}>
+            <Ic name={isExport ? "lock" : "lockOpen"} size={14} />{" "}
+            {isExport ? t("pw.encryptExport") : t("pw.decryptImport")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ProviderModal() {
+  const u = useUi();
+  const m = u.provider;
+  const close = () => { ui.provider = null; emit(); };
+
+  useEffect(() => {
+    if (!m) return;
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [m]);
+
+  if (!m) return null;
+  const displayOf = (p) => (has(`prov.${p.id}`) ? t(`prov.${p.id}`) : p.display);
+  return (
+    <div className="pv-mask" onClick={close}>
+      <div className="pv-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="pv-title">{t("prov.title")}</div>
+        <div className="pv-sub">{t("prov.sub")}</div>
+        <div className="pv-list">
+          {(m.providers || []).map((p) => (
+            <button
+              key={p.id}
+              className="pv-item"
+              onClick={() => { close(); m.onPick?.(p.id); }}
+            >
+              <span className="pv-name">{displayOf(p)}</span>
+              <span className="pv-arrow">→</span>
+            </button>
+          ))}
+        </div>
+        <div className="pv-actions">
+          <button className="btn-ghost pv-cancel" onClick={close}>{t("common.cancel")}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// 首个 pv-item 自动聚焦（挂载后 DOM 由 React 接管，用事件委托找不到 ref，这里直接查询）
+function ProviderFocus() {
+  const u = useUi();
+  useEffect(() => {
+    if (u.provider) document.querySelector(".pv-item")?.focus();
+  }, [u.provider]);
+  return null;
+}
+
+export function openConfirmModal(m) { ui.confirm = m; emit(); }
+export function openPwModal(m) { ui.pw = m; emit(); }
+export function openProviderModal(m) { ui.provider = m; emit(); }
+
+const host = document.createElement("div");
+document.body.appendChild(host);
+createRoot(host).render(
+  <>
+    <ToastHost />
+    <ConfirmModal />
+    <PwModal />
+    <ProviderModal />
+    <ProviderFocus />
+  </>,
+);

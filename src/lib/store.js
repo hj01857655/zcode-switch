@@ -2,7 +2,7 @@
 // React 渲染层经 useSyncExternalStore 订阅版本号；emit() 取代原 render()
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { toast, openPwModal, openConfirmModal, openProviderModal } from "./ui.js";
+import { toast, openPwModal, openConfirmModal, openProviderModal } from "../components/ui-react.jsx";
 import { init, t, lang, localeTag, stripErr } from "./i18n.js";
 
 // ---- 订阅机制 ----

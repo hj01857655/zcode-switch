@@ -3,8 +3,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.jsx";
 
-// 右键菜单与快捷键屏蔽逻辑在 ui.js 副作用里，main.js 与 React 版共用
-import "./lib/ui.js";
+// 右键菜单与快捷键屏蔽逻辑在 ui-react.jsx 副作用里
+import "./components/ui-react.jsx";
 
 const root = createRoot(document.getElementById("app"));
 root.render(

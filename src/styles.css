@@ -1113,3 +1113,79 @@ input:focus-visible,
 .pv-item:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
 .pv-item .pv-arrow { color: var(--ink-mute); font-family: var(--mono); }
 .pv-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
+
+/* ---- 关于页：居中卡片，去表单感 ---- */
+.about-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  padding: 32px;
+}
+.about-card {
+  width: min(460px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 28px 30px 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.about-brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--hairline-soft);
+}
+.about-mark {
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--ink);
+}
+.about-ver {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--amber);
+}
+.about-repo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 8px;
+  text-decoration: none;
+  transition: border-color .12s ease;
+}
+.about-repo:hover { border-color: var(--amber-deep); }
+.about-repo-line { font-size: 12px; color: var(--ink-mute); }
+.about-repo-url {
+  font-family: var(--mono);
+  font-size: 14px;
+  color: var(--amber);
+}
+.about-repo-desc { font-size: 12px; color: var(--ink-dim); }
+.about-block .about-label {
+  font-size: 12px;
+  color: var(--ink-mute);
+  margin-bottom: 6px;
+}
+.about-block p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--ink-dim);
+}
+.about-foot {
+  padding-top: 14px;
+  border-top: 1px solid var(--hairline-soft);
+  font-size: 12px;
+  color: var(--ink-mute);
+  line-height: 1.6;
+}
