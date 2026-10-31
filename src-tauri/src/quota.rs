@@ -26,6 +26,11 @@ pub const CLIENT_APP_VERSION: &str = "3.17.1";
 /// 3.17.1 的头+URL 直打 billing/claim 连续 12 次成功零 3012，版本不敏感。
 /// billing 全链与 touch 统一走探测版本（zcode_app_version），不再保留专用常量。
 
+/// gateway（messages 反代）专用版本：WAF 对 messages 端点的版本自述有版本级判定
+/// （3.17.1 → 405/3012，3.14.0/3.16.3 → 200，2026-11-01 消融实锤）。
+/// 钉 3.16.3 = 与 body 主线前缀同版本（prefix.json 提取自 3.16.3），最自洽。
+pub const GATEWAY_APP_VERSION: &str = "3.16.3";
+
 pub(crate) fn client_platform() -> String {
     let os = crate::zcrypto::node_platform_for(std::env::consts::OS);
     let arch = match std::env::consts::ARCH {

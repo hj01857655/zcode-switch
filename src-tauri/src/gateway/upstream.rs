@@ -17,28 +17,37 @@ impl std::fmt::Display for UpstreamError {
     }
 }
 
-/// messages 头集。默认 = 2026-11-01 逐组 bisect 实测的安全集（每组一发均 200 出话）：
-/// 薄头两条 + 来源头 + per-account mid + 请求 ID + API 版本。
-/// 扳机已定位两条且互相独立：`User-Agent: ZCode/<ver>` 单独 3012、版本头族
-/// （X-ZCode-App-Version/X-Platform/X-Release-Channel/X-Os-*/X-Client-*，无 UA 亦然）单独 3012——
-/// 机理是「自称官方客户端 vs TLS 指纹（JA3）非 Chromium」的矛盾判定，这两类头
-/// 在换 Chromium 指纹层（curl-impersonate 类）之前禁止上 messages；
-/// ZCODE_GATEWAY_FULL_HEADERS=1 仅作归因实验（勿上真实流量）。
+/// messages 头集（2026-11-01 版本门限定案）：WAF 对「版本自述」按版本号分档——
+/// 3.17.1（最新）触发严格 bot 检查（UA 与 X-ZCode-App-Version 均单条实锤 3012，
+/// scripts/header_bisect.py + version_family_bisect.py）；≤3.16.3 放行（3.14.0 两条、
+/// 全头族 3.16.3 均实测 200）。故整套官方头族回归、版本钉死 3.16.3——与 body 主线
+/// 前缀同版本代际。版本号可用 ZCODE_GATEWAY_APP_VERSION 覆盖做归因实验；
+/// billing/touch 通道仍走 quota.rs 的注册表真实探测（那边 3.17.1 才能拿投放）。
+const SAFE_APP_VERSION: &str = "3.16.3";
+
 pub fn headers(token: &str, mid: Option<&str>) -> Vec<(String, String)> {
-    if std::env::var("ZCODE_GATEWAY_FULL_HEADERS").ok().as_deref() == Some("1") {
-        let mut h = crate::quota::zai_billing_headers_with_mid(token, mid.map(str::to_string));
-        h.push(("Content-Type".into(), "application/json".into()));
-        h.push(("anthropic-version".into(), "2023-06-01".into()));
-        return h;
-    }
-    let mut h = vec![
-        ("Authorization".into(), format!("Bearer {token}")),
-        ("Content-Type".into(), "application/json".into()),
+    let ver = std::env::var("ZCODE_GATEWAY_APP_VERSION")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| SAFE_APP_VERSION.to_string());
+    let mut h: Vec<(String, String)> = vec![
+        ("User-Agent".into(), format!("ZCode/{ver}")),
         ("HTTP-Referer".into(), "https://zcode.z.ai".into()),
         ("X-Title".into(), "Z Code@electron".into()),
+        ("X-ZCode-App-Version".into(), ver.clone()),
+        ("X-Platform".into(), crate::quota::client_platform()),
+        ("X-Release-Channel".into(), "stable".into()),
+        ("X-Os-Category".into(), std::env::consts::OS.into()),
+        ("X-Client-Language".into(), "zh-CN".into()),
+        ("X-Client-Timezone".into(), crate::quota::client_timezone()),
         ("anthropic-version".into(), "2023-06-01".into()),
+        ("Authorization".into(), format!("Bearer {token}")),
         ("x-request-id".into(), uuid::Uuid::new_v4().to_string()),
+        ("Content-Type".into(), "application/json".into()),
     ];
+    if let Some(v) = crate::quota::os_version() {
+        h.push(("X-Os-Version".into(), v));
+    }
     if let Some(m) = mid {
         h.push(("X-Device-Mid".into(), m.to_string()));
     }
