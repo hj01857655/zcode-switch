@@ -65,6 +65,24 @@ src-tauri/src/twoapi/
 
 依赖新增：`axum`（或 tiny-http + 手路由）、`tokio`（Tauri 已带）、`reqwest` stream。IPC 命令：`twoapi_start` / `twoapi_stop` / `twoapi_status`，配置落 `~/.zcode-switch/twoapi.json`（端口、sk-… 密钥）。
 
+## 4b. 前端设计（已落骨架：`views/twoapi.jsx`，commit `2183856`）
+
+控制面板复用关于页的居中卡片视觉（`.about-card.twoapi-card`），自上而下四段：
+
+1. **品牌行**：`2API` 大字 mono + 状态徽标（`已停止` 灰 / `运行中` mint 绿，随状态轮询变色）
+2. **端点说明块**：一句话说明 OpenAI 兼容形态与上游调用方式
+3. **配置表单 ×2**：端口输入（默认 8081）、API 密钥输入（调用方鉴权），各带保存按钮——当前 disabled，接 `twoapi_status` 后按「配置与运行态一致才可改」的规则启用
+4. **启停按钮行**：`启动服务` / `停止服务` 互斥 disabled（运行中只亮停止），接 `twoapi_start/stop`
+
+**待接状态设计**（M1 接线时的完整面板）：
+
+- `twoapi_status` 轮询（1s）：`running / port / uptime / requests_total / errors_total / active_accounts`
+- 状态灯三态扩展：`starting`（琥珀）/ `running`（mint）/ `error`（red，附最近错误）
+- 新增**请求日志块**（最近 N 条：时间、端点、账号、状态码、耗时），由 `twoapi_status` 附带最近事件环
+- 多号池可视化：每号一行（名称 + 状态点 + 今日请求数 + 冷却剩余秒），数据从 pool 状态取
+- 保存按钮启用规则：表单值 ≠ 持久值且服务未运行时才可点；运行中改配置需先停止（避免热改端口/密钥的不一致窗口）
+- 样式约束：沿用 panel/hairline/amber/mint 主题变量，不新增配色；表单行复用 `.path-line`；全部文案走 `x.*` i18n 键（zh/en 同步）
+
 ## 5. 里程碑（每步可独立验证）
 
 | # | 内容 | 验证 |
