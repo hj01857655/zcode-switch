@@ -92,11 +92,11 @@ src-tauri/src/gateway/
 
 | # | 内容 | 验证 |
 |---|---|---|
-| M1 | 服务骨架：axum 起停 + `/v1/models` 静态列表 + Bearer 鉴权 + UI 按钮接线 | curl 能 401/200 |
-| M2 | Anthropic messages 非流式：直通 + 前缀注入 + 单号，真实出话 | curl 单轮对话（M3-E 复刻已验 200 出话，本仓 curl 直打未做） |
-| M3 | OpenAI chat/completions 非流式 + 流式 SSE | 转换器已落（openai.rs 主 + translate.rs 副本待撤）；经网关的端到端未验 |
-| M4 | /v1/responses + /v1/messages SSE | Codex / Claude Code 连上 |
-| M5 | 多号池 + 冷却 + 面板状态/日志展示 | pool.rs 已接线 server.rs；面板号池/日志区块未落 |
+| M1 | 服务骨架：axum 起停 + `/v1/models` 静态列表 + Bearer 鉴权 + UI 按钮接线 | ✅ 已验（curl 401/200） |
+| M2 | Anthropic messages 非流式：直通 + 前缀注入，真实出话 | ✅ 已验（Python 同构 200 出话） |
+| M3 | OpenAI chat/completions 非流式 + 流式 SSE | ✅ 已验（多轮出 "5"、流式 42 chunk 出 "收到"） |
+| M4 | /v1/responses + /v1/messages SSE 透传 + pool.rs 多号农场 | ✅ 已落（编译绿；端到端待客户端实测） |
+| M5 | 面板请求日志/池可视化接线（pool 状态 → twoapi_status 扩展） | 未开工 |
 
 ## 6. 风险与前置
 
