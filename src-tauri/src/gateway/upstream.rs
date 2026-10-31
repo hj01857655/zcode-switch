@@ -1,5 +1,5 @@
 // GATEWAY 上游客户端：z.ai anthropic messages 端点调用（SSE 响应透传）
-// 协议对齐 ZCode2api-go internal/zcode/client.go：头集、一律 stream=true、错误分类冷却。
+// 一律 stream=true、错误分类冷却。头集策略见 headers()：默认薄头（M3-E 实测形态）。
 use reqwest::Client as HttpClient;
 
 /// 上游 messages 端点（协议文档 docs/CLAIM.md / GATEWAY.md §2）
@@ -17,13 +17,31 @@ impl std::fmt::Display for UpstreamError {
     }
 }
 
-/// 上游请求头全集：版本头族复用 quota 的真实探测实现（zcode_app_version/平台），
-/// 补 messages 专用头。设备 mid 由调用侧按 farm 成员传入（per-account 虚拟 mid，
-/// 与切号解耦）；None 时缺省 live mid。官方桌面实录含 x-zcode-app-version 族与 x-request-id（plan-08 §2）。
+/// messages 头集。默认 = 2026-11-01 逐组 bisect 实测的安全集（每组一发均 200 出话）：
+/// 薄头两条 + 来源头 + per-account mid + 请求 ID + API 版本。
+/// 扳机已定位两条且互相独立：`User-Agent: ZCode/<ver>` 单独 3012、版本头族
+/// （X-ZCode-App-Version/X-Platform/X-Release-Channel/X-Os-*/X-Client-*，无 UA 亦然）单独 3012——
+/// 机理是「自称官方客户端 vs TLS 指纹（JA3）非 Chromium」的矛盾判定，这两类头
+/// 在换 Chromium 指纹层（curl-impersonate 类）之前禁止上 messages；
+/// ZCODE_GATEWAY_FULL_HEADERS=1 仅作归因实验（勿上真实流量）。
 pub fn headers(token: &str, mid: Option<&str>) -> Vec<(String, String)> {
-    let mut h = crate::quota::zai_billing_headers_with_mid(token, mid.map(str::to_string));
-    h.push(("Content-Type".into(), "application/json".into()));
-    h.push(("anthropic-version".into(), "2023-06-01".into()));
+    if std::env::var("ZCODE_GATEWAY_FULL_HEADERS").ok().as_deref() == Some("1") {
+        let mut h = crate::quota::zai_billing_headers_with_mid(token, mid.map(str::to_string));
+        h.push(("Content-Type".into(), "application/json".into()));
+        h.push(("anthropic-version".into(), "2023-06-01".into()));
+        return h;
+    }
+    let mut h = vec![
+        ("Authorization".into(), format!("Bearer {token}")),
+        ("Content-Type".into(), "application/json".into()),
+        ("HTTP-Referer".into(), "https://zcode.z.ai".into()),
+        ("X-Title".into(), "Z Code@electron".into()),
+        ("anthropic-version".into(), "2023-06-01".into()),
+        ("x-request-id".into(), uuid::Uuid::new_v4().to_string()),
+    ];
+    if let Some(m) = mid {
+        h.push(("X-Device-Mid".into(), m.to_string()));
+    }
     h
 }
 

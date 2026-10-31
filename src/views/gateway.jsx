@@ -113,11 +113,44 @@ export default function GatewayPage() {
         <label style={{ marginTop: 14 }}>{t("x.exampleLabel")}</label>
         <pre className="x-curl">{curlSample}</pre>
 
+        <label style={{ marginTop: 14 }}>FARM · {t("x.farmLabel")}</label>
+        {status?.farm?.members?.length
+          ? <div className="x-farm">
+              {status.farm.members.map((m) => (
+                <div className="x-farm-row" key={m.id}>
+                  <span className={"x-farm-dot" + (m.cooldown_secs > 0 ? " cool" : m.inflight > 0 ? " busy" : "")} />
+                  <span className="x-farm-name" title={m.id}>{m.name}</span>
+                  {m.inflight > 0 ? <span className="x-farm-tag">{t("x.inflight")} {m.inflight}</span> : null}
+                  {m.cooldown_secs > 0
+                    ? <span className="x-farm-tag warn">{t("x.cooldown")} {m.cooldown_secs}s</span>
+                    : null}
+                </div>
+              ))}
+              {status.farm.global_backoff_secs > 0
+                ? <div className="x-farm-global warn">{t("x.globalBackoff")} {status.farm.global_backoff_secs}s</div>
+                : null}
+              <div className="x-farm-stats">
+                {t("x.farmStats", { ok: status.farm.total_ok ?? 0, err: status.farm.total_err ?? 0 })}
+              </div>
+            </div>
+          : <div className="x-log-empty"><Ic name="empty" size={16} /><span>{t("x.farmEmpty")}</span></div>}
+
         <label style={{ marginTop: 14 }}>{t("x.logLabel")}</label>
-        <div className="x-log-empty">
-          <Ic name="empty" size={18} />
-          <span>{t("x.logEmpty")}</span>
-        </div>
+        {status?.logs?.length
+          ? <div className="x-log-list">
+              {status.logs.slice().reverse().map((l, i) => (
+                <div className="x-log-row" key={i}>
+                  <span className="x-log-ts">{l.ts}</span>
+                  <span className="x-log-ep">{l.ep}</span>
+                  <span className="x-log-acct">{l.account}</span>
+                  <span className={"x-log-code" + (l.ok ? " ok" : " fail")}>{l.status}</span>
+                </div>
+              ))}
+            </div>
+          : <div className="x-log-empty">
+              <Ic name="empty" size={18} />
+              <span>{t("x.logEmpty")}</span>
+            </div>}
 
         <div className="hint">{t("x.endpointDesc")}</div>
         {err ? <div className="hint" style={{ color: "var(--red)" }}>{err}</div> : null}

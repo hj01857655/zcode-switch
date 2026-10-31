@@ -8,6 +8,33 @@ pub mod server;
 pub mod translate;
 pub mod upstream;
 
+/// 跨线程共享的网关运行态：farm 快照（池成员/冷却/计数）+ 最近请求日志环。
+/// SvcState 持一份 Arc，twoapi_status 命令经 TwoApiState 持另一份 Arc 读取。
+pub struct GatewayShared {
+    pub log: Mutex<Vec<serde_json::Value>>,
+    /// farm 调度器：SvcState 与 twoapi_status 共用同一实例（计数/冷却/游标全局一致）
+    pub farm: pool::Farm,
+}
+impl GatewayShared {
+    pub fn push_log(&self, entry: serde_json::Value) {
+        if let Ok(mut v) = self.log.lock() {
+            v.push(entry);
+            let n = v.len();
+            if n > LOG_CAP {
+                v.drain(0..n - LOG_CAP);
+            }
+        }
+    }
+    pub fn logs(&self) -> Vec<serde_json::Value> {
+        self.log.lock().map(|v| v.clone()).unwrap_or_default()
+    }
+    /// 池快照（成员/冷却/计数），gateway_status 消费
+    pub fn snapshot(&self, members: &[pool::FarmMember]) -> serde_json::Value {
+        self.farm.snapshot(members)
+    }
+}
+pub const LOG_CAP: usize = 50;
+
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -17,6 +44,8 @@ pub struct GatewayState {
     pub running: AtomicBool,
     pub config: Mutex<config::GatewayConfig>,
     shutdown: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+    /// 跨线程共享：请求日志环 + farm 计数（SvcState 写，twoapi_status 读）
+    pub shared: std::sync::Arc<GatewayShared>,
 }
 
 impl GatewayState {
@@ -25,6 +54,10 @@ impl GatewayState {
             running: AtomicBool::new(false),
             config: Mutex::new(config::GatewayConfig::load()),
             shutdown: Mutex::new(None),
+            shared: std::sync::Arc::new(GatewayShared {
+                log: Mutex::new(Vec::new()),
+                farm: pool::Farm::new(),
+            }),
         }
     }
 
@@ -46,6 +79,7 @@ impl GatewayState {
             .try_into()
             .map_err(|e| format!("bad port {}: {e}", cfg.port))?;
         let api_key = cfg.api_key.clone();
+        let shared = std::sync::Arc::clone(&self.shared);
         let running = &self.running;
 
         std::thread::Builder::new()
@@ -57,7 +91,7 @@ impl GatewayState {
                     .build()
                     .expect("gateway tokio runtime");
                 rt.block_on(async move {
-                    server::serve(addr, api_key, rx).await;
+                    server::serve(addr, api_key, rx, shared).await;
                 });
             })
             .map_err(|e| format!("spawn gateway thread: {e}"))?;

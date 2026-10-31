@@ -117,7 +117,10 @@ def farm_members():
     return out
 
 
-def headers_for(token, mid, ver):
+def headers_for(token, mid, ver, thin=False):
+    # thin=True：仅鉴权+类型两条（M3-E 实测 200 形态，gateway 默认）；否则全头族（quota.rs 同构，3012 嫌疑形态）
+    if thin:
+        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     # quota.rs zai_headers_with_version 同构 + messages 专用头（upstream.rs headers）
     h = {
         "User-Agent": f"ZCode/{ver}",
@@ -184,6 +187,7 @@ def aggregate(raw):
 def main():
     model = "GLM-5.3-Flash"
     ask = "1+1 等于几？只回数字"
+    thin = "--thin" in sys.argv
     args = sys.argv[1:]
     if "--model" in args:
         model = args[args.index("--model") + 1]
@@ -209,8 +213,8 @@ def main():
 
     # pick + 换号重放一轮（pool.rs 调度的单发缩影）
     for m in members:
-        h = headers_for(m["token"], m["mid"], ver)
-        print(f"\n=== 尝试 {m['name']} (mid={ (m['mid'] or '')[:8] }…) ===")
+        h = headers_for(m["token"], m["mid"], ver, thin)
+        print(f"\n=== 尝试 {m['name']} (mid={ (m['mid'] or '')[:8] }…) 头集={'thin' if thin else 'full'} ===")
         try:
             req = urllib.request.Request(UPSTREAM, method="POST", data=payload, headers=h)
             with urllib.request.urlopen(req, timeout=120, context=ctx) as r:

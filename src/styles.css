@@ -1304,3 +1304,78 @@ input:focus-visible,
   font-size: 12px;
   margin-top: -6px;
 }
+
+/* ---- Gateway M5：池可视化 + 请求日志列表 ---- */
+.x-farm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.x-farm-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.x-farm-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mint);
+  flex: none;
+}
+.x-farm-dot.busy { background: var(--amber); }
+.x-farm-dot.cool { background: var(--red-dim); }
+.x-farm-name {
+  color: var(--ink);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.x-farm-tag {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ink-mute);
+  font-family: var(--mono);
+}
+.x-farm-tag.warn { color: var(--amber); }
+.x-farm-global {
+  font-size: 12px;
+  color: var(--amber);
+  padding: 6px 12px;
+}
+.x-farm-stats {
+  font-size: 12px;
+  color: var(--ink-mute);
+  font-family: var(--mono);
+  padding: 0 12px;
+}
+.x-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--bg-2);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.x-log-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--mono);
+  font-size: 12px;
+  padding: 2px 0;
+}
+.x-log-ts { color: var(--ink-mute); flex: none; }
+.x-log-ep { color: var(--ink-dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.x-log-acct { color: var(--ink-dim); flex: none; max-width: 140px; overflow: hidden; text-overflow: ellipsis; }
+.x-log-code.ok { color: var(--mint); }
+.x-log-code.fail { color: var(--red); }

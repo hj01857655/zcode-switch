@@ -1267,6 +1267,9 @@ async fn gateway_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String
 async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let state = app.state::<gateway::GatewayState>();
     let cfg = state.config.lock().map_err(|e| e.to_string())?.clone();
+    // farm 快照：成员清单现取（账号库投影），池侧只回冷却/在飞/计数
+    let members = gateway::pool::farm_members().unwrap_or_default();
+    let snapshot = state.shared.farm.snapshot(&members);
     Ok(json!({
         "running": state.is_running(),
         "port": cfg.port,
@@ -1275,5 +1278,8 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
             format!("{}…{}", &cfg.api_key[..6], &cfg.api_key[cfg.api_key.len()-4..])
         } else { "***".to_string() },
         "hasApiKey": !cfg.api_key.is_empty(),
+        // M5 扩展：池快照 + 请求日志环
+        "farm": snapshot,
+        "logs": state.shared.logs(),
     }))
 }

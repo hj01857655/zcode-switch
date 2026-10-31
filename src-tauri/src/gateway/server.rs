@@ -13,14 +13,15 @@ use super::{pool, translate, upstream};
 struct SvcState {
     api_key: String,
     http: reqwest::Client,
-    farm: pool::Farm,
+    /// 跨线程共享：farm 调度器 + 请求日志环 + 计数（twoapi_status 经 TwoApiState 读取）
+    shared: std::sync::Arc<super::GatewayShared>,
 }
 
-pub async fn serve(addr: std::net::SocketAddr, api_key: String, mut shutdown: watch::Receiver<bool>) {
+pub async fn serve(addr: std::net::SocketAddr, api_key: String, mut shutdown: watch::Receiver<bool>, shared: std::sync::Arc<super::GatewayShared>) {
     let state = std::sync::Arc::new(SvcState {
         api_key,
         http: reqwest::Client::new(),
-        farm: pool::Farm::new(),
+        shared,
     });
     let app = axum::Router::new()
         .route("/health", get(health))
@@ -108,7 +109,7 @@ async fn messages(
         (StatusCode::INTERNAL_SERVER_ERROR, api_error("api_error", &e.to_string()))
     })?;
     if !stream {
-        let reply = farm_send(&state, &prepared).await?;
+        let reply = farm_send(&state, &prepared, "/v1/messages").await?;
         let bytes = match reply {
             UpstreamReply::Stream(resp) => resp.bytes().await.map_err(|e| {
                 (StatusCode::BAD_GATEWAY, api_error("api_error", &e.to_string()))
@@ -118,7 +119,7 @@ async fn messages(
         return Ok(Json(translate::aggregate_sse(&raw, &model)).into_response());
     }
     // 流式：上游 SSE 原样透传（Anthropic 原生客户端，事件形态一致，零转换）
-    let resp = match farm_send(&state, &prepared).await? {
+    let resp = match farm_send(&state, &prepared, "/v1/messages").await? {
         UpstreamReply::Stream(r) => r,
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(16);
@@ -160,7 +161,7 @@ async fn chat_completions(
         (StatusCode::INTERNAL_SERVER_ERROR, api_error("api_error", &e.to_string()))
     })?;
     if !stream {
-        let reply = farm_send(&state, &prepared).await?;
+        let reply = farm_send(&state, &prepared, "/v1/chat/completions").await?;
         let bytes = match reply {
             UpstreamReply::Stream(resp) => resp.bytes().await.map_err(|e| {
                 (StatusCode::BAD_GATEWAY, api_error("api_error", &e.to_string()))
@@ -170,7 +171,7 @@ async fn chat_completions(
         return Ok(Json(translate::aggregate_sse_to_openai(&raw, &model)).into_response());
     }
 
-    let resp = match farm_send(&state, &prepared).await? {
+    let resp = match farm_send(&state, &prepared, "/v1/chat/completions").await? {
         UpstreamReply::Stream(r) => r,
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(16);
@@ -212,6 +213,7 @@ enum UpstreamReply {
 async fn farm_send(
     state: &SvcState,
     prepared: &[u8],
+    ep: &str,
 ) -> Result<UpstreamReply, (StatusCode, Json<Value>)> {
     let members = match tokio::task::spawn_blocking(pool::farm_members).await {
         Ok(Ok(m)) => m,
@@ -226,8 +228,8 @@ async fn farm_send(
     }
     // 初始尝试 + 1 次换号重放；两次都失败即把最后的错误交回客户端
     for attempt in 0..2 {
-        let Some(idx) = state.farm.pick(&members) else {
-            let wait = state.farm.global_backoff_secs().max(1);
+        let Some(idx) = state.shared.farm.pick(&members) else {
+            let wait = state.shared.farm.global_backoff_secs().max(1);
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
                 api_error("api_error", &format!("farm unavailable, retry after {wait}s")),
@@ -236,14 +238,22 @@ async fn farm_send(
         let m = &members[idx];
         match upstream::messages_stream(&state.http, &m.token, m.mid.as_deref(), prepared).await {
             Ok(resp) => {
-                state.farm.settle(&m.id, idx, members.len(), true, 0);
+                state.shared.farm.settle(&m.id, idx, members.len(), true, 0);
+                state.shared.push_log(json!({
+                    "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    "ep": ep, "account": m.name, "status": 200, "ok": true,
+                }));
                 return Ok(UpstreamReply::Stream(resp));
             }
             Err(up) => {
                 let cd = upstream::cooldown_secs(up.status, &up.body);
-                state.farm.settle(&m.id, idx, members.len(), false, cd);
+                state.shared.farm.settle(&m.id, idx, members.len(), false, cd);
+                state.shared.push_log(json!({
+                    "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    "ep": ep, "account": m.name, "status": up.status, "ok": false,
+                }));
                 if upstream::is_global_risk(up.status, &up.body) {
-                    state.farm.global_backoff(pool::GLOBAL_BACKOFF_SECS);
+                    state.shared.farm.global_backoff(pool::GLOBAL_BACKOFF_SECS);
                     return Err((
                         StatusCode::from_u16(up.status).unwrap_or(StatusCode::FORBIDDEN),
                         api_error("upstream_error", &up.body),
@@ -284,7 +294,7 @@ async fn responses_endpoint(
     let prepared = serde_json::to_vec(&prepared).map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, api_error("api_error", &e.to_string()))
     })?;
-    let reply = farm_send(&state, &prepared).await?;
+    let reply = farm_send(&state, &prepared, "/v1/responses").await?;
     let bytes = match reply {
         UpstreamReply::Stream(resp) => resp.bytes().await.map_err(|e| {
             (StatusCode::BAD_GATEWAY, api_error("api_error", &e.to_string()))

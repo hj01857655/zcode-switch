@@ -1,5 +1,6 @@
 // GATEWAY 农场调度：账号库投影 + 粘性轮转 + 冷却 + 在飞上限 + 3012 全局退避。
 // 设计见 docs/GATEWAY.md §3。调度状态纯内存（游标/冷却表重启清零），不落第二份盘。
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -24,6 +25,9 @@ struct Inner {
     inflight: HashMap<String, u32>,
     cool: HashMap<String, Instant>,
     global_until: Option<Instant>,
+    /// 累计请求计数（成功/失败，settle 落账）
+    total_ok: u64,
+    total_err: u64,
 }
 
 pub struct Farm(Mutex<Inner>);
@@ -76,6 +80,7 @@ impl Farm {
             Ok(g) => g,
             Err(_) => return,
         };
+        if ok { inner.total_ok += 1 } else { inner.total_err += 1 }
         if let Some(c) = inner.inflight.get_mut(member_id) {
             *c = c.saturating_sub(1);
         }
@@ -93,6 +98,39 @@ impl Farm {
         if let Ok(mut inner) = self.0.lock() {
             inner.global_until = Some(Instant::now() + Duration::from_secs(secs));
         }
+    }
+
+    /// 状态快照：账号 id → 冷却剩余秒；全局退避；累计计数。twoapi_status / 前端池可视化消费。
+    pub fn snapshot(&self, members: &[FarmMember]) -> Value {
+        let mut inner = match self.0.lock() {
+            Ok(g) => g,
+            Err(_) => return Value::Null,
+        };
+        Self::sweep(&mut inner);
+        let now = Instant::now();
+        let members_json: Vec<Value> = members
+            .iter()
+            .map(|m| {
+                let cool_left = inner
+                    .cool
+                    .get(&m.id)
+                    .and_then(|t| t.saturating_duration_since(now).as_secs().into())
+                    .unwrap_or(0u64);
+                json!({
+                    "id": m.id, "name": m.name,
+                    "inflight": inner.inflight.get(&m.id).copied().unwrap_or(0),
+                    "cooldown_secs": cool_left,
+                })
+            })
+            .collect();
+        json!({
+            "members": members_json,
+            "global_backoff_secs": inner.global_until
+                .and_then(|t| t.saturating_duration_since(now).as_secs().into())
+                .unwrap_or(0u64),
+            "total_ok": inner.total_ok,
+            "total_err": inner.total_err,
+        })
     }
 
     /// 全局退避剩余秒（0 = 未在退避）。全员不可用但未在退避时返回 1，客户端至少退一秒。
