@@ -836,7 +836,10 @@ pub fn switch_to(paths: &Paths, id: &str, force: bool, restart: bool, hot: bool)
             }
         }
         let mid = ensure_virtual_device_mid_locked(paths, &target.id)?;
-        write_live_device_mid(paths, &mid)?;
+        // 运行中的客户端会把内存里的旧 mid 整写回 telemetry-state，写入会被覆盖，留给下次冷启生效
+        if !zcode_running() {
+            write_live_device_mid(paths, &mid)?;
+        }
         let uid = ensure_virtual_arms_uid_locked(paths, &target.id)?;
         if !zcode_running() {
             let _ = write_live_arms_uid(paths, &uid);
@@ -865,8 +868,11 @@ pub fn switch_to(paths: &Paths, id: &str, force: bool, restart: bool, hot: bool)
         hot_swap_verified(paths, &target, &creds)?;
         backfill_relay_pass_hash(paths, &target.id, &creds);
         reset_live_plan_cache(paths);
+        align_family_domain(paths, &target);
         let mid = ensure_virtual_device_mid_locked(paths, &target.id)?;
-        write_live_device_mid(paths, &mid)?;
+        if !zcode_running() {
+            write_live_device_mid(paths, &mid)?;
+        }
         ensure_virtual_arms_uid_locked(paths, &target.id)?;
         let probe = run_switch_probe(paths, &target, Some(mid));
         return Ok(SwitchResult {
@@ -921,7 +927,9 @@ pub fn switch_to(paths: &Paths, id: &str, force: bool, restart: bool, hot: bool)
         rematerialize_wiped_builtins(paths, &target);
     }
     let mid = ensure_virtual_device_mid_locked(paths, &target.id)?;
-    write_live_device_mid(paths, &mid)?;
+    if !zcode_running() {
+        write_live_device_mid(paths, &mid)?;
+    }
     let uid = ensure_virtual_arms_uid_locked(paths, &target.id)?;
     let _ = write_live_arms_uid(paths, &uid);
 
@@ -1110,12 +1118,14 @@ pub fn live_quota(paths: &Paths) -> Result<quota::QuotaOverview, String> {
     if !is_logged_in(&creds) {
         return Err(tr("err.live.quota"));
     }
-    quota::quota_for_live(&paths.home, &creds, live_quota_config(paths).as_ref())
+    quota::quota_for_live(&paths.home, &creds, live_quota_config(paths).as_ref(), None)
 }
 
 pub fn account_quota(paths: &Paths, id: &str) -> Result<quota::QuotaOverview, String> {
     let acc = load_account(paths, id)?;
-    quota::quota_for_snapshot(&paths.home, &acc.credentials, acc.config.as_ref())
+    // 身份块跟 claim 链对齐：查谁的额度就带谁的 virtual mid，不带 live 全局 mid
+    let mid = ensure_virtual_device_mid(paths, id).ok();
+    quota::quota_for_snapshot(&paths.home, &acc.credentials, acc.config.as_ref(), mid.as_deref())
 }
 
 fn ensure_virtual_device_mid_locked(paths: &Paths, id: &str) -> Result<String, String> {

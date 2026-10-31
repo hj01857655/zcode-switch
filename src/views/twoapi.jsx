@@ -1,14 +1,69 @@
-// React 版 2API 页：反代服务控制面板（占位骨架）
-// 服务本体（ZCode2api-go 旁挂 / 内嵌 axum）后接，本页先落 UI 结构：
-// 状态灯 + 端口/密钥表单 + 启停按钮（disabled，接后端命令后启用）
+// React 版 2API 页：反代服务控制面板（M1 已接线 twoapi_start/stop/status）
+// 服务本体为 Rust 内嵌 axum（src-tauri/src/twoapi/），本页是其控制面。
+// 注：文件为 .jsx（非 .tsx），不可用 TS 类型标注。
 import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { t } from "../lib/i18n.js";
 import { Ic } from "../components/iconsx.jsx";
 
 export default function TwoApiPage() {
+  const [status, setStatus] = useState<Status | null>(null);
   const [port, setPort] = useState("8081");
   const [apiKey, setApiKey] = useState("");
-  const [running, setRunning] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const refresh = async () => {
+    try {
+      const s = await invoke("twoapi_status");
+      setStatus(s);
+      setPort(String(s.port));
+    } catch (e) {
+      setErr(String(e));
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+    const timer = setInterval(() => refresh(), 2000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const running = status?.running ?? false;
+  // 保存启用规则：服务未运行 且 表单值与持久值不一致
+  const portDirty = status != null && String(status.port) !== port.trim();
+  const keyDirty = apiKey.trim() !== "";
+  const canSave = !running && (portDirty || keyDirty);
+
+  const guard = async (fn) => {
+    if (busy) return;
+    setBusy(true);
+    setErr("");
+    try {
+      await fn();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  };
+
+  const doStart = () => guard(async () => {
+    await invoke("twoapi_start", { port: null, apiKey: null });
+  });
+  const doStop = () => guard(async () => {
+    await invoke("twoapi_stop");
+  });
+  const doSave = () => guard(async () => {
+    const p = parseInt(port.trim(), 10);
+    if (!Number.isFinite(p) || p <= 0 || p > 65535) throw new Error(t("x.badPort"));
+    await invoke("twoapi_start", { port: p, apiKey: apiKey.trim() || null });
+    // start 语义含配置更新；未运行时需要先落配置再启动
+    const s = await invoke("twoapi_status");
+    if (!s.running) await invoke("twoapi_start", { port: p, apiKey: apiKey.trim() || null });
+    setApiKey("");
+  });
 
   return (
     <div className="about-wrap">
@@ -29,26 +84,33 @@ export default function TwoApiPage() {
           <input className="zcode-path" type="text" value={port}
             onChange={(e) => setPort(e.target.value)}
             placeholder="8081" />
-          <button className="btn-ghost" disabled>{t("common.save")}</button>
+          <button className="btn-ghost" disabled={!canSave || busy} onClick={() => guard(doSave)}>
+            {t("common.save")}
+          </button>
         </div>
 
         <div className="path-line">
           <input className="zcode-path" type="text" value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={t("x.apiKeyPh")} />
-          <button className="btn-ghost" disabled>{t("common.save")}</button>
+            placeholder={status?.apiKeyMasked || t("x.apiKeyPh")} />
+          <button className="btn-ghost" disabled={!canSave || busy} onClick={() => guard(doSave)}>
+            {t("common.save")}
+          </button>
         </div>
 
         <div className="twoapi-actions">
-          <button className="btn-primary has-ic" disabled={!running}>
+          <button className="btn-primary has-ic" disabled={!running || busy} onClick={doStop}>
             <Ic name="power" size={15} /> {t("x.stop")}
           </button>
-          <button className="btn-primary has-ic" disabled={running}>
+          <button className="btn-primary has-ic" disabled={running || busy} onClick={doStart}>
             <Ic name="play" size={15} /> {t("x.start")}
           </button>
         </div>
 
-        <div className="about-foot">{t("x.wipNote")}</div>
+        {status?.apiKeyMasked ? (
+          <div className="about-foot">{t("x.apiKeyNow")} {status.apiKeyMasked}</div>
+        ) : null}
+        {err ? <div className="about-foot" style={{ color: "var(--red)" }}>{err}</div> : null}
       </div>
     </div>
   );

@@ -182,6 +182,8 @@ export const en = {
   "x.endpointLabel": "Proxy endpoint",
   "x.endpointDesc": "OpenAI-compatible endpoint: local HTTP service accepting /v1/chat/completions, calling z.ai upstream with the current login state and relaying responses.",
   "x.apiKeyPh": "API key (caller auth)",
+  "x.badPort": "Invalid port (1-65535)",
+  "x.apiKeyNow": "Current key:",
   "x.start": "Start",
   "x.stop": "Stop",
   "x.wipNote": "Service backend pending (planned: sidecar ZCode2api-go). UI skeleton only.",

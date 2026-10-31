@@ -182,6 +182,8 @@ export const zh = {
   "x.endpointLabel": "反代端点",
   "x.endpointDesc": "OpenAI 兼容接口：本机起 HTTP 服务，接收 /v1/chat/completions 请求，以当前登录态调用 z.ai 上游并转发响应。",
   "x.apiKeyPh": "API 密钥（调用方鉴权用）",
+  "x.badPort": "端口无效（1-65535）",
+  "x.apiKeyNow": "当前密钥：",
   "x.start": "启动服务",
   "x.stop": "停止服务",
   "x.wipNote": "服务本体接入中（计划旁挂 ZCode2api-go），当前为界面骨架。",

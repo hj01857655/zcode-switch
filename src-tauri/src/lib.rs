@@ -7,6 +7,7 @@ mod oauth;
 mod probe;
 mod quota;
 mod store;
+mod twoapi;
 mod zcrypto;
 
 use serde_json::{json, Value};
@@ -248,12 +249,17 @@ async fn switch_to(app: AppHandle, id: String, force: bool, restart: bool) -> Re
 
 #[tauri::command]
 async fn get_live_quota() -> Result<quota::QuotaOverview, String> {
-    store::live_quota(&Paths::detect())
+    // 阻塞 ureq + 429 退避重试，丢 blocking 池不占 runtime worker
+    tauri::async_runtime::spawn_blocking(move || store::live_quota(&Paths::detect()))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
 async fn get_account_quota(id: String) -> Result<quota::QuotaOverview, String> {
-    store::account_quota(&Paths::detect(), &id)
+    tauri::async_runtime::spawn_blocking(move || store::account_quota(&Paths::detect(), &id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -1138,6 +1144,7 @@ async fn open_external(url: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(twoapi::TwoApiState::new())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main(app);
         }))
@@ -1181,6 +1188,9 @@ pub fn run() {
             launch_zcode,
             open_external,
             reveal_main,
+            twoapi_start,
+            twoapi_stop,
+            twoapi_status,
         ]))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1225,4 +1235,45 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// ---- TWOAPI IPC 命令（M1） ----
+
+#[tauri::command]
+async fn twoapi_start(
+    app: tauri::AppHandle,
+    port: Option<u16>,
+    api_key: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let state = app.state::<twoapi::TwoApiState>();
+    // 配置更新：只在提供字段时改写（表单保存语义）
+    {
+        let mut cfg = state.config.lock().map_err(|e| e.to_string())?;
+        if let Some(p) = port { cfg.port = p; }
+        if let Some(k) = api_key { if !k.trim().is_empty() { cfg.api_key = k.trim().to_string(); } }
+    }
+    let started = state.start()?;
+    Ok(json!({ "running": state.is_running(), "started": started }))
+}
+
+#[tauri::command]
+async fn twoapi_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let state = app.state::<twoapi::TwoApiState>();
+    let stopped = state.stop()?;
+    Ok(json!({ "running": state.is_running(), "stopped": stopped }))
+}
+
+#[tauri::command]
+async fn twoapi_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let state = app.state::<twoapi::TwoApiState>();
+    let cfg = state.config.lock().map_err(|e| e.to_string())?.clone();
+    Ok(json!({
+        "running": state.is_running(),
+        "port": cfg.port,
+        // 密钥只回掩码，明文永不回前端
+        "apiKeyMasked": if cfg.api_key.len() > 8 {
+            format!("{}…{}", &cfg.api_key[..6], &cfg.api_key[cfg.api_key.len()-4..])
+        } else { "***".to_string() },
+        "hasApiKey": !cfg.api_key.is_empty(),
+    }))
 }

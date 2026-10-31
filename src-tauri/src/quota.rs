@@ -384,14 +384,14 @@ pub fn candidate_tokens(creds: &Value, config: Option<&Value>, secret: &str, new
     tokens
 }
 
-fn http_get_json(url: &str, token: &str, retry_429: bool) -> Result<Value, String> {
+fn http_get_json(url: &str, token: &str, retry_429: bool, mid: Option<&str>) -> Result<Value, String> {
     let retry_delays = [500u64, 1500, 4000];
     let agent = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(10))
         .timeout(Duration::from_secs(20))
         .build();
     let headers = if url.contains("zcode.z.ai") {
-        zai_billing_headers(token)
+        zai_billing_headers_with_mid(token, mid.map(str::to_string))
     } else {
         bigmodel_headers(token)
     };
@@ -491,8 +491,8 @@ fn query_with_token_via(token: &str, fetch: &FetchFn) -> Result<QuotaOverview, S
     Err(best_err.unwrap_or_else(|| crate::i18n::tr("err.quota.fail")))
 }
 
-fn query_with_token(token: &str) -> Result<QuotaOverview, String> {
-    query_with_token_via(token, &|url, tok| http_get_json(url, tok, true))
+fn query_with_token(token: &str, mid: Option<&str>) -> Result<QuotaOverview, String> {
+    query_with_token_via(token, &|url, tok| http_get_json(url, tok, true, mid))
 }
 
 pub(crate) fn business_ok(v: &Value) -> bool {
@@ -515,7 +515,7 @@ pub(crate) fn is_active_coding_plan_entry(s: &Value) -> bool {
         && s.get("status").and_then(|v| v.as_str()) == Some("VALID")
 }
 
-pub fn query_quota(tokens: &[String]) -> Result<QuotaOverview, String> {
+pub fn query_quota(tokens: &[String], mid: Option<&str>) -> Result<QuotaOverview, String> {
     if tokens.is_empty() {
         return Err(crate::i18n::tr("err.quota.no_token"));
     }
@@ -523,7 +523,7 @@ pub fn query_quota(tokens: &[String]) -> Result<QuotaOverview, String> {
     let mut first_business: Option<String> = None;
     let mut auth_fail = 0usize;
     for t in tokens {
-        match query_with_token(t) {
+        match query_with_token(t, mid) {
             Ok(ov) => return Ok(ov),
             Err(e) => {
                 if e.contains("401") {
@@ -537,7 +537,7 @@ pub fn query_quota(tokens: &[String]) -> Result<QuotaOverview, String> {
     }
     if auth_fail > 0 && auth_fail == tokens.len() {
         sleep(Duration::from_millis(1500));
-        if let Ok(ov) = query_with_token(&tokens[0]) {
+        if let Ok(ov) = query_with_token(&tokens[0], mid) {
             return Ok(ov);
         }
         return Err(crate::i18n::tr("err.token.expired"));
@@ -805,25 +805,25 @@ fn merge_parts(parts: Vec<QuotaOverview>) -> QuotaOverview {
     }
 }
 
-fn query_channels(channels: &[Channel]) -> Result<QuotaOverview, String> {
-    query_channels_via(channels, &|url, tok| http_get_json(url, tok, true))
+fn query_channels(channels: &[Channel], mid: Option<&str>) -> Result<QuotaOverview, String> {
+    query_channels_via(channels, &|url, tok| http_get_json(url, tok, true, mid))
 }
 
-pub fn quota_for_live(home: &Path, creds: &Value, config: Option<&Value>) -> Result<QuotaOverview, String> {
+pub fn quota_for_live(home: &Path, creds: &Value, config: Option<&Value>, mid: Option<&str>) -> Result<QuotaOverview, String> {
     let secret = zcrypto::default_secret(home);
     let new_gen = crate::store::new_gen_provider_config(home);
     let channels = pick_channels(creds, config, &secret, new_gen);
     if !channels.is_empty() {
-        if let Ok(ov) = query_channels(&channels) {
+        if let Ok(ov) = query_channels(&channels, mid) {
             return Ok(ov);
         }
     }
     let tokens = candidate_tokens(creds, config, &secret, new_gen);
-    query_quota(&tokens)
+    query_quota(&tokens, mid)
 }
 
-pub fn quota_for_snapshot(home: &Path, creds: &Value, config: Option<&Value>) -> Result<QuotaOverview, String> {
-    quota_for_live(home, creds, config)
+pub fn quota_for_snapshot(home: &Path, creds: &Value, config: Option<&Value>, mid: Option<&str>) -> Result<QuotaOverview, String> {
+    quota_for_live(home, creds, config, mid)
 }
 
 fn unit_label(unit: Option<i64>, number: Option<i64>) -> (String, String) {
