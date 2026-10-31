@@ -54,7 +54,7 @@ fn data_image(url: &str) -> Option<Value> {
 }
 
 /// OpenAI tool_choice → Anthropic tool_choice；"none"/不可映射返回 None（不发）
-fn map_tool_choice(raw: Option<&Value>) -> Option<Value> {
+pub fn map_tool_choice_pub(raw: Option<&Value>) -> Option<Value> {
     match raw? {
         Value::String(s) => match s.to_lowercase().trim() {
             "auto" => Some(json!({ "type": "auto" })),
@@ -280,7 +280,7 @@ pub fn openai_to_upstream(req: &Value) -> Result<Value, String> {
             .collect();
         out["tools"] = json!(conv);
     }
-    if let Some(tc) = map_tool_choice(req.get("tool_choice")) {
+    if let Some(tc) = map_tool_choice_pub(req.get("tool_choice")) {
         out["tool_choice"] = tc;
     }
     Ok(out)

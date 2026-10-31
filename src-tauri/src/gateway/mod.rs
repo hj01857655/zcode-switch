@@ -2,6 +2,8 @@
 // 设计见 docs/GATEWAY.md。服务独立于窗口生命周期，托盘模式照常运行。
 pub mod config;
 pub mod openai;
+pub mod pool;
+pub mod responses;
 pub mod server;
 pub mod translate;
 pub mod upstream;

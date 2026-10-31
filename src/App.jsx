@@ -36,6 +36,12 @@ function SideNav({ view, setView, s, unsaved }) {
         <Ic name="list" size={16} /> {t("m.accounts")}
       </button>
       <button
+        className={"side-item" + (view === "gateway" ? " on" : "")}
+        onClick={() => setView("gateway")}
+      >
+        <Ic name="swap" size={16} /> {t("x.menuLabel")}
+      </button>
+      <button
         className={"side-item" + (view === "settings" ? " on" : "")}
         onClick={() => setView("settings")}
       >
@@ -46,12 +52,6 @@ function SideNav({ view, setView, s, unsaved }) {
         onClick={() => setView("about")}
       >
         <Ic name="empty" size={16} /> {t("a.menuLabel")}
-      </button>
-      <button
-        className={"side-item" + (view === "gateway" ? " on" : "")}
-        onClick={() => setView("gateway")}
-      >
-        <Ic name="swap" size={16} /> {t("x.menuLabel")}
       </button>
       <div className="side-spacer" />
       <div className="side-foot">

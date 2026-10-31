@@ -332,6 +332,11 @@ fn openai_finish_reason(stop: Option<&str>) -> &'static str {
 }
 
 /// 上游 SSE 聚合为 OpenAI chat.completion 非流式响应（M3）
+/// anthropic 原生形态聚合（/v1/responses 的 text/usage 提取复用此结构）
+pub fn aggregate_sse_to_anthropic(raw: &str, model: &str) -> Value {
+    aggregate_sse(raw, model)
+}
+
 pub fn aggregate_sse_to_openai(raw: &str, model: &str) -> Value {
     let m = aggregate_sse(raw, model);
     let text = m
