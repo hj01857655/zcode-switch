@@ -1,4 +1,4 @@
-// React 版设置页：逻辑与原生 settings.js 一一对应（保留为回退），弹窗/toast 复用 ui.js，
+// React 版设置页：嵌入主窗口（App 侧边栏）与独立路径共用，弹窗/toast 复用 ui.js，
 // ui.js 副作用（右键与快捷键屏蔽）随导入生效
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -39,8 +39,9 @@ function LangSeg({ cur, onPick }) {
   );
 }
 
-export default function SettingsPage({ embedded = false }) {
-  const [state, setState] = useState(null);
+export default function SettingsPage({ embedded = false, initialState = null }) {
+  // 主窗口已拉过同一份 get_state，直接作初始值，避免打开时白等一轮文件 IO
+  const [state, setState] = useState(initialState);
   const [autostart, setAutostart] = useState(false);
   const [appVer, setAppVer] = useState("");
   const [loadErr, setLoadErr] = useState("");

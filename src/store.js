@@ -428,11 +428,6 @@ export const actions = {
     });
   },
 
-  async openSettings() {
-    try { await invoke("open_settings"); }
-    catch (e) { toast(stripErr(e), "err"); }
-  },
-
   acctQuota(id) {
     const dueAt = quotaDue[id];
     loadAcctQuota(id).then(() => {

@@ -22,7 +22,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, "index.html"),
-        settings: resolve(__dirname, "settings.html"),
         captcha: resolve(__dirname, "captcha.html"),
       },
     },

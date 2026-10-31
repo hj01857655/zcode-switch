@@ -46,7 +46,6 @@ html, body {
   height: 100dvh;
   overflow: hidden;
 }
-body.settings-win #app { overflow-y: auto; }
 
 .side-spacer { flex: 1; }
 
@@ -116,7 +115,15 @@ body.settings-win #app { overflow-y: auto; }
   flex-direction: column;
   overflow: hidden;
 }
-.content > .settings { flex: 1; overflow-y: auto; }
+.content > .settings,
+.settings-view > .settings { flex: 1; overflow-y: auto; }
+.settings-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settings-view.hidden { display: none; }
 
 button {
   font-family: inherit;
