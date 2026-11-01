@@ -1,5 +1,10 @@
 # Z·SWITCH (zcode-switch)
 
+![Release](https://img.shields.io/github/v/release/hj01857655/zcode-switch?label=release&sort=semver)
+![CI](https://github.com/hj01857655/zcode-switch/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/github/license/hj01857655/zcode-switch)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-blue)
+
 [简体中文](README.md) ｜ **English**
 
 > **Provenance**: this repository is a fork of [pjpv/zcode-switch](https://github.com/pjpv/zcode-switch), developed further on top of it (security hardening, the quota system, the local gateway, etc. — see below). The original design and core architecture belong to the upstream author; all additions in this fork are shared back under the same license (MIT).
@@ -7,6 +12,19 @@
 A Tauri 2 desktop tool for one-click switching between multiple ZCode accounts, with live quota display. Only the login identity changes — projects, sessions, settings and plugins all stay untouched.
 
 ![screenshot](docs/screenshot.png)
+
+## Download
+
+Grab the installer for your platform from [Releases](https://github.com/hj01857655/zcode-switch/releases/latest):
+
+| Platform | File |
+|---|---|
+| Windows x64 | `zcode-switch_<ver>_x64-setup.exe` (NSIS installer) |
+| macOS Apple Silicon | `zcode-switch_<ver>_aarch64.dmg` |
+| macOS Intel | `zcode-switch_<ver>_x64.dmg` |
+| Linux amd64 | `.deb` (Debian/Ubuntu) or `.AppImage` (universal) |
+
+**Requirements**: Windows 10+; macOS 12+; Ubuntu 22.04 / Debian 12+ (AppImage is universal). If SmartScreen / Gatekeeper warns on first launch, choose "Run anyway" — the binaries are not code-signed, which is expected.
 
 ## Features
 

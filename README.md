@@ -1,5 +1,10 @@
 # Z·SWITCH (zcode-switch)
 
+![Release](https://img.shields.io/github/v/release/hj01857655/zcode-switch?label=%E7%89%88%E6%9C%AC&sort=semver)
+![CI](https://github.com/hj01857655/zcode-switch/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/github/license/hj01857655/zcode-switch)
+![Platform](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows%20%7C%20macOS%20%7C%20Linux-blue)
+
 **简体中文** ｜ [English](README.en.md)
 
 > **项目来源**：本仓库是 [pjpv/zcode-switch](https://github.com/pjpv/zcode-switch) 的 fork，在其基础上持续开发（安全加固、额度体系、本地网关等增强见下）。上游的原始设计与核心架构归功于原作者；本 fork 的全部增量以同 License（MIT）回馈社区，向上游的 issue/PR 欢迎各取所需。
@@ -7,6 +12,19 @@
 Tauri 2 桌面工具：在多个 ZCode 账号之间一键切换，自动显示额度。只换登录身份——项目、会话、设置全部共用不动。
 
 ![screenshot](docs/screenshot.png)
+
+## 下载安装
+
+从 [Releases](https://github.com/hj01857655/zcode-switch/releases/latest) 下载对应平台的安装包：
+
+| 平台 | 文件 |
+|---|---|
+| Windows x64 | `zcode-switch_<版本>_x64-setup.exe`（NSIS 安装向导） |
+| macOS Apple Silicon | `zcode-switch_<版本>_aarch64.dmg` |
+| macOS Intel | `zcode-switch_<版本>_x64.dmg` |
+| Linux amd64 | `.deb`（Debian/Ubuntu）或 `.AppImage`（通用） |
+
+**系统要求**：Windows 10+；macOS 12+；Ubuntu 22.04 / Debian 12+（AppImage 通用）。Electron 应用首启被 SmartScreen/Gatekeeper 提示时选「仍要运行」——未做代码签名，属正常现象。
 
 ## 功能
 
