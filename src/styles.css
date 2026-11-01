@@ -533,6 +533,9 @@ input:focus-visible,
   padding: 7px 10px;
 }
 .settings input:focus { outline: none; border-color: var(--amber-deep); }
+/* 密钥与调用示例要能选中复制：全局 user-select:none 的豁免 */
+.settings .hint code,
+.x-curl { user-select: text; cursor: text; }
 .settings .hint {
   font-size: 14px;
   color: var(--ink-mute);

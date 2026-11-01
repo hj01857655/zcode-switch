@@ -196,6 +196,8 @@ export const en = {
   "x.show": "show",
   "x.hide": "hide",
   "x.apiKeyNow": "Current key:",
+  "x.copyKey": "Copy",
+  "x.copied": "Copied",
   "x.start": "Start",
   "x.stop": "Stop",
   "x.wipNote": "Service backend pending (planned: sidecar ZCode2api-go). UI skeleton only.",

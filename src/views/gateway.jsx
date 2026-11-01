@@ -11,6 +11,25 @@ export default function GatewayPage() {
   const [apiKey, setApiKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const copyKey = async () => {
+    const key = status?.apiKey || "";
+    if (!key) return;
+    try {
+      await navigator.clipboard.writeText(key);
+    } catch {
+      // WebView2 剪贴板 API 不可用时退回 execCommand
+      const ta = document.createElement("textarea");
+      ta.value = key;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  };
 
   const refresh = async () => {
     try {
@@ -107,7 +126,14 @@ export default function GatewayPage() {
           </button>
         </div>
         {status?.apiKeyMasked
-          ? <div className="hint" style={{ marginTop: 6 }}>{t("x.apiKeyNow")} <code>{status.apiKeyMasked}</code></div>
+          ? <div className="hint" style={{ marginTop: 6 }}>
+              {t("x.apiKeyNow")} <code>{status.apiKey || status.apiKeyMasked}</code>
+              {status.apiKey
+                ? <button className="btn-ghost" style={{ marginLeft: 8 }} onClick={copyKey}>
+                    {copied ? t("x.copied") : t("x.copyKey")}
+                  </button>
+                : null}
+            </div>
           : null}
 
         <label style={{ marginTop: 14 }}>{t("x.exampleLabel")}</label>

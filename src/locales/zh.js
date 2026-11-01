@@ -196,6 +196,8 @@ export const zh = {
   "x.show": "显示",
   "x.hide": "隐藏",
   "x.apiKeyNow": "当前密钥：",
+  "x.copyKey": "复制",
+  "x.copied": "已复制",
   "x.start": "启动服务",
   "x.stop": "停止服务",
   "x.wipNote": "服务本体接入中（计划旁挂 ZCode2api-go），当前为界面骨架。",
