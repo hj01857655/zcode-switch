@@ -198,6 +198,21 @@ pub fn run(args: &[String]) -> (String, i32) {
             }
             ok(json!({ "anyClaimable": any, "accounts": items }))
         }
+        "referral" => {
+            let Some(id) = flag(rest, "--id") else {
+                return (err(&"usage: referral --id <id>"), 2);
+            };
+            let res = ensure_virtual_device_mid(&paths, &id).and_then(|mid| {
+                let acc = load_account(&paths, &id)?;
+                let summary = crate::referral::summary(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid.clone()))?;
+                let invitees = crate::referral::invitees(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid)).unwrap_or(Value::Null);
+                Ok(json!({ "id": acc.id, "name": acc.name, "summary": summary.get("data").cloned().unwrap_or(Value::Null), "invitees": invitees.get("data").cloned().unwrap_or(Value::Null) }))
+            });
+            match res {
+                Ok(v) => ok(v),
+                Err(e) => return (err(&e), 1),
+            }
+        }
         "behavior" => {
             let las = flag(rest, "--launch-after-switch");
             let ctt = flag(rest, "--close-to-tray");

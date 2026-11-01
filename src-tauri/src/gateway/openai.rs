@@ -393,13 +393,16 @@ pub fn sse_done() -> &'static str {
 }
 
 /// 上游 anthropic SSE 全量聚合 → OpenAI chat.completion 非流式响应（M3）。
-/// 文本/思考进 completion_frame；tool_calls 仅流式透出（非流式聚合形状不含）。
+/// 文本/思考进 completion_frame；tool_calls 按 index 聚合（Go openAIToolCalls 同构，
+/// 空 arguments 补 "{}"），纯工具调用时 content 置 null。
 pub fn aggregate_sse_to_openai(raw: &str, model: &str) -> Value {
     let mut text = String::new();
     let mut reasoning = String::new();
     let mut finish = "stop".to_string();
     let mut input = 0i64;
     let mut output = 0i64;
+    // index → (call_id, name, arguments)
+    let mut tools: std::collections::BTreeMap<usize, (String, String, String)> = Default::default();
     for line in raw.lines() {
         let data = match line.strip_prefix("data: ") {
             Some(d) => d.trim(),
@@ -408,6 +411,18 @@ pub fn aggregate_sse_to_openai(raw: &str, model: &str) -> Value {
         match translate_sse_line(data) {
             Some(Delta::Content(s)) => text.push_str(&s),
             Some(Delta::Reason(s)) => reasoning.push_str(&s),
+            Some(Delta::ToolStart { index, id, name }) => {
+                let e = tools.entry(index).or_default();
+                if !id.is_empty() {
+                    e.0 = id;
+                }
+                if !name.is_empty() {
+                    e.1 = name;
+                }
+            }
+            Some(Delta::ToolArgs { index, args }) => {
+                tools.entry(index).or_default().2.push_str(&args);
+            }
             Some(Delta::FinishUsage { finish: f, output: o }) => {
                 finish = f;
                 output = o;
@@ -416,7 +431,7 @@ pub fn aggregate_sse_to_openai(raw: &str, model: &str) -> Value {
             _ => {}
         }
     }
-    completion_frame(
+    let mut frame = completion_frame(
         &format!("chatcmpl-{}", uuid::Uuid::new_v4().simple()),
         model,
         &text,
@@ -424,7 +439,24 @@ pub fn aggregate_sse_to_openai(raw: &str, model: &str) -> Value {
         &finish,
         input,
         output,
-    )
+    );
+    if !tools.is_empty() {
+        let arr: Vec<Value> = tools
+            .into_iter()
+            .map(|(index, (id, name, args))| {
+                json!({
+                    "index": index, "id": id, "type": "function",
+                    "function": { "name": name, "arguments": if args.is_empty() { "{}" } else { &args } },
+                })
+            })
+            .collect();
+        let msg = &mut frame["choices"][0]["message"];
+        msg["tool_calls"] = json!(arr);
+        if text.is_empty() {
+            msg["content"] = json!(null);
+        }
+    }
+    frame
 }
 
 /// 上游 anthropic SSE → OpenAI chat.completion.chunk 流式装配器（M3）。
@@ -590,6 +622,31 @@ mod tests {
         assert!(fin.contains("\"finish_reason\":\"stop\""));
         assert!(fin.contains("\"total_tokens\":11"));
         assert!(fin.contains("data: [DONE]"));
+    }
+
+    #[test]
+    fn aggregate_includes_tool_calls() {
+        let sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"get_weather\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\\\"BJ\\\"}\"}}\n\n",
+            "data: {\"type\":\"content_block_start\",\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_2\",\"name\":\"noop\"}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":7}}\n\n",
+        );
+        let out = aggregate_sse_to_openai(sse, "GLM-5.3-Flash");
+        let msg = &out["choices"][0]["message"];
+        assert_eq!(out["choices"][0]["finish_reason"], "tool_calls");
+        assert_eq!(msg["content"], json!(null)); // 纯工具调用无文本
+        let calls = msg["tool_calls"].as_array().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0]["index"], 0);
+        assert_eq!(calls[0]["id"], "toolu_1");
+        assert_eq!(calls[0]["function"]["name"], "get_weather");
+        assert_eq!(calls[0]["function"]["arguments"], "{\"city\":\"BJ\"}");
+        // 无参数块补 "{}"
+        assert_eq!(calls[1]["function"]["arguments"], "{}");
+        assert_eq!(out["usage"]["total_tokens"], 16);
     }
 
     #[test]

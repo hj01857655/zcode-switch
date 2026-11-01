@@ -11,7 +11,7 @@ pub const MAX_INFLIGHT: u32 = 2;
 /// 3012/405 全局退避：WAF 判的是 IP+指纹不是账号，单号冷却会让重放循环把整池指纹喂脏
 pub const GLOBAL_BACKOFF_SECS: u64 = 10 * 60;
 
-pub struct FarmMember {
+pub struct PoolMember {
     pub id: String,
     pub name: String,
     pub token: String,
@@ -20,8 +20,11 @@ pub struct FarmMember {
 
 #[derive(Default)]
 struct Inner {
-    /// 下一次 pick 的起点。成功后停在被选中号上（粘性），失败后 +1（换号）
+    /// 下一次 pick 的起点。粘性开：成功后停在被选中号上，失败后 +1（换号）；
+    /// 粘性关（轮换）：成功也 +1，池内分摊
     cursor: usize,
+    /// 账号粘性开关（配置面，serve 启动时写入）
+    sticky: bool,
     inflight: HashMap<String, u32>,
     cool: HashMap<String, Instant>,
     global_until: Option<Instant>,
@@ -30,11 +33,18 @@ struct Inner {
     total_err: u64,
 }
 
-pub struct Farm(Mutex<Inner>);
+pub struct Pool(Mutex<Inner>);
 
-impl Farm {
+impl Pool {
     pub fn new() -> Self {
-        Self(Mutex::new(Inner::default()))
+        Self(Mutex::new(Inner { sticky: true, ..Default::default() }))
+    }
+
+    /// 粘性开关（配置面）：开 = 成功后驻留同号（吃上游 prompt cache 命中），关 = 每请求轮换分摊
+    pub fn set_sticky(&self, v: bool) {
+        if let Ok(mut inner) = self.0.lock() {
+            inner.sticky = v;
+        }
     }
 
     fn sweep(inner: &mut Inner) {
@@ -47,7 +57,7 @@ impl Farm {
 
     /// 选下一个可用号：跳过冷却中 / 在飞超限的成员，成功后 cursor 粘在被选号。
     /// 返回 None = 全局退避中，或全员不可用（用 global_backoff_secs 区分）。
-    pub fn pick(&self, members: &[FarmMember]) -> Option<usize> {
+    pub fn pick(&self, members: &[PoolMember]) -> Option<usize> {
         let mut inner = self.0.lock().ok()?;
         Self::sweep(&mut inner);
         if inner.global_until.is_some() {
@@ -73,8 +83,8 @@ impl Farm {
         None
     }
 
-    /// 请求收尾：在飞 -1；失败时游标挪到下一号并按档落冷却。
-    /// 成功不动游标——粘性的全部实现就在这一行不做的事。
+    /// 请求收尾：在飞 -1；失败时游标挪到下一号并按档落冷却；
+    /// 成功时仅粘性关才挪游标（轮换分摊）——粘性的全部实现就是这一处分支
     pub fn settle(&self, member_id: &str, idx: usize, member_count: usize, ok: bool, cooldown_secs: u64) {
         let mut inner = match self.0.lock() {
             Ok(g) => g,
@@ -84,13 +94,13 @@ impl Farm {
         if let Some(c) = inner.inflight.get_mut(member_id) {
             *c = c.saturating_sub(1);
         }
-        if !ok && member_count > 0 {
+        if member_count > 0 && (!ok || !inner.sticky) {
             inner.cursor = (idx + 1) % member_count;
-            if cooldown_secs > 0 {
-                inner
-                    .cool
-                    .insert(member_id.to_string(), Instant::now() + Duration::from_secs(cooldown_secs));
-            }
+        }
+        if !ok && cooldown_secs > 0 {
+            inner
+                .cool
+                .insert(member_id.to_string(), Instant::now() + Duration::from_secs(cooldown_secs));
         }
     }
 
@@ -101,7 +111,7 @@ impl Farm {
     }
 
     /// 状态快照：账号 id → 冷却剩余秒；全局退避；累计计数。twoapi_status / 前端池可视化消费。
-    pub fn snapshot(&self, members: &[FarmMember]) -> Value {
+    pub fn snapshot(&self, members: &[PoolMember]) -> Value {
         let mut inner = match self.0.lock() {
             Ok(g) => g,
             Err(_) => return Value::Null,
@@ -149,7 +159,7 @@ impl Farm {
 
 /// 农场成员清单：账号库投影，每次请求现取（claim_token 内部有缓存路径）。
 /// 跳过未登录与 jwt_expired 的号；单号 token 解密失败不连坐整池。
-pub fn farm_members() -> Result<Vec<FarmMember>, String> {
+pub fn members() -> Result<Vec<PoolMember>, String> {
     let paths = crate::Paths::detect();
     let secret = crate::zcrypto::default_secret(&paths.home);
     let accounts = crate::store::list_accounts(&paths)?;
@@ -167,7 +177,7 @@ pub fn farm_members() -> Result<Vec<FarmMember>, String> {
             Ok(t) => t,
             Err(_) => continue,
         };
-        out.push(FarmMember {
+        out.push(PoolMember {
             id: a.id,
             name: a.name,
             token,
@@ -175,4 +185,37 @@ pub fn farm_members() -> Result<Vec<FarmMember>, String> {
         });
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn members2() -> Vec<PoolMember> {
+        vec![
+            PoolMember { id: "a".into(), name: "A".into(), token: "t".into(), mid: None },
+            PoolMember { id: "b".into(), name: "B".into(), token: "t".into(), mid: None },
+        ]
+    }
+
+    #[test]
+    fn sticky_stays_on_success_rotates_when_off() {
+        let m = members2();
+        let pool = Pool::new();
+        // 粘性：成功后驻留同号
+        let i = pool.pick(&m).unwrap();
+        pool.settle(&m[i].id, i, m.len(), true, 0);
+        assert_eq!(pool.pick(&m).unwrap(), i);
+        // 轮换：成功也让游标前移
+        pool.set_sticky(false);
+        let i = pool.pick(&m).unwrap();
+        pool.settle(&m[i].id, i, m.len(), true, 0);
+        assert_eq!(pool.pick(&m).unwrap(), (i + 1) % m.len());
+        // 失败永远换号 + 落冷却
+        let i = pool.pick(&m).unwrap();
+        pool.settle(&m[i].id, i, m.len(), false, 60);
+        let j = pool.pick(&m).unwrap();
+        assert_ne!(j, i);
+        assert!(pool.snapshot(&m)["members"][i]["cooldown_secs"].as_u64().unwrap() > 0);
+    }
 }

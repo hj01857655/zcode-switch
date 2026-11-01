@@ -9,6 +9,21 @@ export function init(lang) {
   document.documentElement.lang = localeTag();
 }
 
+// 乐观切换在途时，盘上值尚未更新：轮询/刷新读到的旧语言不许覆盖 UI
+let PENDING = null;
+export function beginLangSync(lang) { PENDING = lang; }
+export function endLangSync() { PENDING = null; }
+export function langPending() { return PENDING; }
+export function syncLang(lang) {
+  if (PENDING != null || !lang) return;
+  init(lang);
+}
+// 远端 state 快照在途期间带的是盘上旧语言：写入 state 前用它替换
+export function patchLang(s) {
+  if (PENDING != null && s) return { ...s, language: PENDING };
+  return s;
+}
+
 export function lang() { return LANG; }
 export function localeTag() { return LANG === "en" ? "en-US" : "zh-CN"; }
 
