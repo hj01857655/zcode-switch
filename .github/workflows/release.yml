@@ -53,8 +53,11 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # 应用内更新签名私钥（minisign，无口令）；缺失时 updater 产物 latest.json 无法生成
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         with:
           tagName: ${{ github.ref_name }}
+          # Windows 只出 NSIS，latest.json 里指向 *-setup.exe 而非默认的 msi
           releaseName: 'Z·SWITCH ${{ github.ref_name }}'
           releaseBody: |
             见 [README](https://github.com/${{ github.repository }}/blob/main/README.md) 了解完整功能。
@@ -74,6 +77,7 @@ jobs:
             SHA-256 校验和见各 `checksums-*.txt`。
           releaseDraft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+          updaterJsonPreferNsis: true
           args: --bundles ${{ matrix.bundles }} ${{ matrix.rust_target && format('--target {0}', matrix.rust_target) || '' }}
 
       - name: Upload portable exe + checksums (windows)

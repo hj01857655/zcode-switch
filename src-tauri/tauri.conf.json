@@ -34,6 +34,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": [
       "nsis"
     ],
@@ -53,6 +54,14 @@
           "English"
         ]
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFEMTlBQ0IwQjI0MUZFQzEKUldUQi9rR3lzS3dacmRqbGJHS1lzeVJoejNaZWFTc29WUkJwMTQ4eDNDU2g0bjJTTlhsbmEvdmgK",
+      "endpoints": [
+        "https://github.com/hj01857655/zcode-switch/releases/latest/download/latest.json"
+      ]
     }
   }
 }

@@ -1,8 +1,10 @@
-// React 版关于页：版本、功能特性、账号库安全说明、上游仓库（自设置页迁出）
+// React 版关于页：版本、应用内更新、功能特性、账号库安全说明、上游仓库（自设置页迁出）
 // 视觉：平铺整页，与设置页同语言（无卡片壳，panel 分区 + hairline + amber 点缀）
 // 订阅 store：语言快捷钮切换时本页文案即时跟随，不需切走再切回
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { t } from "../lib/i18n.js";
 import { subscribe, getVersion } from "../lib/store.js";
 
@@ -15,12 +17,75 @@ function Feature({ title, desc }) {
   );
 }
 
+// 应用内更新：关于页手动检查（端点 404 在首个签名版本发布前必然出现，故不做进页自动检查）；
+// 发现新版本后下载并安装，Windows 下安装器自行接管重启，relaunch 兜底其余平台
+const UP_IDLE = { st: "idle", ver: "", pct: 0, err: "" };
+
 export default function AboutPage() {
   useSyncExternalStore(subscribe, getVersion);
   const [appVer, setAppVer] = useState("");
+  const [up, setUp] = useState(UP_IDLE);
+  const upRef = useRef(null);
   useEffect(() => {
     invoke("app_version").then((v) => setAppVer(v || "")).catch(() => setAppVer("-"));
   }, []);
+
+  async function runCheck() {
+    setUp({ ...UP_IDLE, st: "checking" });
+    try {
+      const u = await check();
+      if (!u) { setUp({ ...UP_IDLE, st: "latest" }); return; }
+      upRef.current = u;
+      setUp({ ...UP_IDLE, st: "available", ver: u.version });
+    } catch (e) {
+      setUp({ ...UP_IDLE, st: "err", err: String(e) });
+    }
+  }
+
+  async function doInstall() {
+    setUp((s) => ({ ...s, st: "downloading", pct: 0 }));
+    try {
+      let received = 0;
+      let total = 0;
+      await upRef.current.downloadAndInstall((evt) => {
+        if (evt.event === "Started") {
+          total = evt.data.contentLength || 0;
+        } else if (evt.event === "Progress") {
+          received += evt.data.chunkLength;
+          if (total > 0) {
+            const pct = Math.min(100, Math.round((received / total) * 100));
+            setUp((s) => (s.st === "downloading" ? { ...s, pct } : s));
+          }
+        } else if (evt.event === "Finished") {
+          setUp((s) => ({ ...s, pct: 100 }));
+        }
+      });
+      await relaunch();
+    } catch (e) {
+      setUp({ ...UP_IDLE, st: "err", err: String(e) });
+    }
+  }
+
+  const updRow =
+    up.st === "idle" ? (
+      <button type="button" className="btn-ghost" onClick={runCheck}>{t("a.updCheck")}</button>
+    ) : up.st === "checking" ? (
+      <span className="about-upd-hint">{t("a.updChecking")}</span>
+    ) : up.st === "latest" ? (
+      <span className="about-upd-hint">{t("a.updLatest")}</span>
+    ) : up.st === "available" ? (
+      <>
+        <span className="about-upd-hint">{t("a.updAvailable", { ver: up.ver })}</span>
+        <button type="button" className="btn-ghost" onClick={doInstall}>{t("a.updInstall")}</button>
+      </>
+    ) : up.st === "downloading" ? (
+      <span className="about-upd-hint">{t("a.updDownloading")} {up.pct}%</span>
+    ) : (
+      <>
+        <span className="about-upd-err">{t("a.updFail", { err: up.err })}</span>
+        <button type="button" className="btn-ghost" onClick={runCheck}>{t("a.updRetry")}</button>
+      </>
+    );
 
   return (
     <div className="about-wrap">
@@ -31,6 +96,11 @@ export default function AboutPage() {
             ? <span className="about-ver">…</span>
             : appVer !== "-" && <span className="about-ver">v{appVer}</span>}
           <span className="about-tagline">{t("a.tagline")}</span>
+        </div>
+
+        <div className="about-block about-upd">
+          <div className="about-label">{t("a.updLabel")}</div>
+          <div className="about-upd-row">{updRow}</div>
         </div>
 
         <div className="about-block">
