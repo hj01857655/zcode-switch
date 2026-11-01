@@ -79,8 +79,8 @@ src-tauri/src/gateway/
 
 1. **品牌行**：`Gateway` 大字 mono + 状态徽标（`已停止` 灰 / `运行中` mint 绿）；`gateway_status` 1s 轮询（running/port/uptime/requests_total/errors_total/pool）
 2. **端点块**：Base URL（一键复制）+ API 密钥（打码显示 + 复制），多账号池概览（每号名称 + 状态点 + 今日请求数 + 冷却剩余秒）
-3. **操作行**：启动/停止互斥按钮、`配置` 调优弹窗（tuneOpen 内联：端口/密钥/池参数/冷却参数，未运行才可改）、`测试请求` 弹窗（pv-panel：模型下拉 + 消息输入 + 结果面板）
-4. **请求日志**：独立日志页 `views/gateway-logs.jsx`（网关页 `打开日志` 入口）；表格列 = 时间/模型/账号/状态/耗时，行展开为 LogBlock 单一实现，响应侧支持原文/JSON/正文/SSE（sseFlat 拍平）四种格式切换；日志落盘开关在日志页
+3. **操作行**：启动/停止互斥按钮、`配置` 调优弹窗（tuneOpen 内联：端口/密钥/池参数/冷却参数，未运行才可改）、`冒烟测试` 弹窗（渠道测试/Playground 形态：协议切换 OpenAI `/v1/chat/completions` / Anthropic `/v1/messages`、System 输入框（OpenAI 走消息数组首位、Anthropic 走顶层 system）、消息、max_tokens/temperature/top_p 参数行、流式开关、动态 curl 预览（按当前表单生成，密钥打码）、结果面板（HTTP/耗时/流式标记/token 用量双协议归一 `out↑/in↓`）、近 5 次历史）
+4. **请求日志**：独立日志页 `views/gateway-logs.jsx`（网关页 `打开日志` 入口）；顶部统计卡三组：请求（总数/成功/失败/成功率）、延迟（端到端 p50/p95 + 流式 TTFT p50/p95，分位数口径不用均值——业界惯例，均值被长尾拉偏）、TOKENS（输入↓/输出↑/缓存⚡），随筛选联动；表格列 = 时间/模型/账号/状态/耗时（流式显示 TTFT/总耗时），行首 chevron 展开指示器（折叠朝右/展开旋转 90° 朝下），行展开为 LogBlock 单一实现，响应侧支持原文/JSON/正文/SSE（sseFlat 拍平）四种格式切换；支持筛选（端点/状态/搜索）与 JSON 导出；日志落盘开关在日志页
 - 样式：Tailwind v4（`src/tailwind.css` `@theme`）+ 主题变量；文案全部 `x.*` i18n 键（zh/en 同步，`yarn check:i18n` 门禁）
 
 ## 5. 里程碑（每步可独立验证）

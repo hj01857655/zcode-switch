@@ -62,7 +62,8 @@ const sseFlat = (s) => String(s).split("\n").filter((l) => l.startsWith("data: "
 function LogBlock({ label, raw, resp }) {
   const isJson = useMemo(() => { try { JSON.parse(String(raw).trim()); return true; } catch { return false; } }, [raw]);
   const isSse = useMemo(() => /^\s*event:|^\s*data: /m.test(String(raw)), [raw]);
-  const [fmt, setFmt] = useState("raw");
+  // 默认档：能解析就用 JSON，否则落原文
+  const [fmt, setFmt] = useState(isJson ? "json" : "raw");
   const opts = [
     ["raw", t("x.fmtRaw")],
     ...(isJson ? [["json", "JSON"]] : []),
@@ -109,6 +110,7 @@ function LogRow({ l }) {
   return (
     <div className={"x-log-item" + (hasDetail && open ? " expanded" : "")}>
       <div className={"x-log-row" + (hasDetail ? " clickable" : "")} onClick={() => hasDetail && setOpen(!open)}>
+        <span className={"x-log-caret" + (hasDetail ? (open ? " open" : "") : " none")}>▸</span>
         <span className="x-log-ts" title={new Date(l.ts).toLocaleString()}>{relTime(l.ts)}</span>
         <span className="x-log-ep">
           <span className={"x-log-method" + (epMethod(l.ep) === "GET" ? " get" : "")}>{epMethod(l.ep)}</span>
@@ -116,7 +118,7 @@ function LogRow({ l }) {
         </span>
         <span className="x-log-acct" title={l.account}>{l.account ?? "—"}</span>
         <span className="x-log-model">{l.model ?? "—"}</span>
-        <span className={"x-log-ms" + msTier(l.ms)}>{l.ms != null ? `${l.ms}ms` : "—"}</span>
+        <span className={"x-log-ms" + msTier(l.ms)} title={l.ttft != null ? `TTFT ${l.ttft}ms` : undefined}>{l.ms != null ? (l.stream && l.ttft != null ? `${l.ttft}/${l.ms}ms` : `${l.ms}ms`) : "—"}</span>
         <span className="x-log-tok" title={`${t("x.tokOut")} ${l.tout ?? 0} · ${t("x.tokIn")} ${l.tin ?? 0}`}>{(!l.tin && !l.tout) ? "—" : `${fmtTok(l.tout || 0)}↑/${fmtTok(l.tin || 0)}↓`}</span>
         <span className="x-log-cache" title={`${t("x.tokCacheR")} ${l.tcr ?? 0} · ${t("x.tokCacheW")} ${l.tcw ?? 0}`}>{(l.tcr || l.tcw) ? `${fmtTok(l.tcr || 0)}+${fmtTok(l.tcw || 0)}` : "—"}</span>
         <span className="x-log-stream">{l.stream != null ? (l.stream ? t("x.stream") : t("x.nonStream")) : "—"}</span>
@@ -128,11 +130,12 @@ function LogRow({ l }) {
         ? <div className="x-log-detail" onClick={(e) => e.stopPropagation()}>
             <div className="x-log-meta">
               <div className="x-log-tokens">
-                <span className="x-tok">↑ {t("x.tokIn")} {l.tin ?? 0}</span>
-                <span className="x-tok">↓ {t("x.tokOut")} {l.tout ?? 0}</span>
-                <span className={"x-tok" + ((l.tcr ?? 0) > 0 ? " hit" : "")}>⚡ {t("x.tokCacheR")} {l.tcr ?? 0}</span>
-                <span className={"x-tok" + ((l.tcw ?? 0) > 0 ? " hit" : "")}>✎ {t("x.tokCacheW")} {l.tcw ?? 0}</span>
-                <span className="x-tok">⏱ {l.ms != null ? `${l.ms}ms` : "—"}</span>
+                <span className="x-tok"><Ic name="tokIn" size={11} /> {t("x.tokIn")} {l.tin ?? 0}</span>
+                <span className="x-tok"><Ic name="tokOut" size={11} /> {t("x.tokOut")} {l.tout ?? 0}</span>
+                <span className={"x-tok" + ((l.tcr ?? 0) > 0 ? " hit" : "")}><Ic name="bolt" size={11} /> {t("x.tokCacheR")} {l.tcr ?? 0}</span>
+                <span className={"x-tok" + ((l.tcw ?? 0) > 0 ? " hit" : "")}><Ic name="pen" size={11} /> {t("x.tokCacheW")} {l.tcw ?? 0}</span>
+                <span className="x-tok"><Ic name="clock" size={11} /> {l.ms != null ? `${l.ms}ms` : "—"}</span>
+                {l.ttft != null ? <span className="x-tok" title="TTFT">⚡{l.ttft}ms</span> : null}
               </div>
               <button className="btn-ghost x-log-copy"
                 onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(JSON.stringify(l, null, 2)).catch(() => {}); }}>
@@ -143,12 +146,12 @@ function LogRow({ l }) {
               <span className="x-log-k">{t("x.logColModel")}</span><span className="x-log-v">{l.model ?? "—"}{l.stream != null ? ` · ${t(l.stream ? "x.stream" : "x.nonStream")}` : ""}</span>
               <span className="x-log-k">{t("x.logColAcct")}</span><span className="x-log-v">{l.account ?? "—"}</span>
               {l.attempt != null && l.attempt > 0 ? <><span className="x-log-k">{t("x.logAttempt")}</span><span className="x-log-v">{l.attempt + 1}</span></> : null}
-              <span className="x-log-k">{t("x.logColCode")}</span><span className={"x-log-v " + (l.ok ? "ok" : "fail")}>{l.status}</span>
+              <span className="x-log-k">{t("x.logColCode")}</span><span className={"x-log-v " + (l.ok ? "ok" : "fail")}>{l.status}{l.req_id ? <small style={{ marginLeft: 6, color: "var(--ink-mute)" }}>{l.req_id.slice(0, 8)}</small> : null}</span>
             </div>
             <div className="x-log-blocks">
             {["req", "resp"].filter((k) => l[k]).map((k) => (
               <LogBlock key={k} resp={k === "resp"} raw={l[k]}
-                label={k === "req" ? t("x.logReq") : t("x.logResp")} />
+                label={k === "req" ? `${t("x.logReq")} · ${l.ep || ""}` : `${t("x.logResp")} · ${l.status ?? ""}`} />
             ))}
             </div>
             {l.err ? <div className="x-log-err">{l.err}</div> : null}
@@ -164,12 +167,20 @@ export default function GatewayPage({ onOpenLogs }) {
   const [apiKey, setApiKey] = useState("");
   // 调优项（端口/密钥/超时/重试/退避/CORS/体积上限/日志/sticky）收进「配置」对话框，页面只留端点概览
   const [tuneOpen, setTuneOpen] = useState(false);
-  // 测试请求弹窗：选模型、填消息、发真请求、看结果
+  // 测试请求弹窗：选模型、填消息、发真请求、看结果；历史留痕可回看
   const [testOpen, setTestOpen] = useState(false);
   const [testModel, setTestModel] = useState("");
   const [testMsg, setTestMsg] = useState("hi");
+  const [testProto, setTestProto] = useState("openai");
+  const [testStream, setTestStream] = useState(false);
+  const [testMaxTok, setTestMaxTok] = useState(256);
+  const [testTemp, setTestTemp] = useState(0.7);
+  const [testTopP, setTestTopP] = useState(1);
+  const [testSys, setTestSys] = useState("");
+  const [testShowCode, setTestShowCode] = useState(false);
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState(null);
+  const [testHistory, setTestHistory] = useState([]);
   const [connectInput, setConnectInput] = useState("");
   const [retriesInput, setRetriesInput] = useState("");
   const [backoffInput, setBackoffInput] = useState("");
@@ -300,29 +311,86 @@ export default function GatewayPage({ onOpenLogs }) {
   const doStop = () => guard(async () => {
     await invoke("gateway_stop");
   });
-  // 页面内自测：直接打本地网关，结果 toast 直读（CSP connect-src 已放行 127.0.0.1）
-  // 测试请求弹窗发送：真调 /v1/chat/completions，结果留在弹窗里看
+  // 页面内自测：直接打本地网关，结果留在弹窗里看（冒烟测试：鉴权→池选号→上游→返回 全链路）
+  // 流式开关：true 走 SSE 读流（验证流式链路），false 走聚合
+  // 当前表单对应的请求体（发送与 curl 预览共用）；system：OpenAI 走消息数组，Anthropic 走顶层字段
+  const buildTestBody = () => {
+    const sys = testSys.trim();
+    const common = { model: testModel, max_tokens: Number(testMaxTok) || 256, temperature: Number(testTemp), top_p: Number(testTopP), stream: testStream };
+    if (testProto === "anthropic") {
+      const b = { ...common, messages: [{ role: "user", content: testMsg || "hi" }] };
+      if (sys) b.system = sys;
+      return b;
+    }
+    return { ...common, messages: sys ? [{ role: "system", content: sys }, { role: "user", content: testMsg || "hi" }] : [{ role: "user", content: testMsg || "hi" }] };
+  };
   const doTestSend = () => guard(async () => {
     setTestBusy(true);
     setTestResult(null);
     try {
       const t0 = Date.now();
-      const r = await fetch(`${endpoint}/chat/completions`, {
+      const anthropic = testProto === "anthropic";
+      const path = anthropic ? "/messages" : "/chat/completions";
+      const body = buildTestBody();
+      const r = await fetch(`${endpoint}${path}`, {
         method: "POST",
-        headers: { "Authorization": `Bearer ${apiKey || status?.apiKey || ""}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: testModel, messages: [{ role: "user", content: testMsg || "hi" }], max_tokens: 256 }),
+        headers: {
+          "Authorization": `Bearer ${apiKey || status?.apiKey || ""}`,
+          "Content-Type": "application/json",
+          ...(anthropic ? { "anthropic-version": "2023-06-01" } : {}),
+        },
+        body: JSON.stringify(body),
       });
-      const body = await r.json().catch(() => ({}));
-      const text = r.ok
-        ? (body?.choices?.[0]?.message?.content || JSON.stringify(body).slice(0, 400))
-        : (body?.error?.message || JSON.stringify(body).slice(0, 300));
-      setTestResult({ ok: r.ok, status: r.status, ms: Date.now() - t0, text: String(text) });
+      let text = "";
+      let usage = null;
+      if (testStream && r.ok) {
+        // 流式：逐帧读 SSE；OpenAI 拼 delta.content，Anthropic 拼 delta.text
+        const reader = r.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          const lines = buf.split("\n");
+          buf = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            const d = line.slice(6).trim();
+            if (d === "[DONE]") continue;
+            try {
+              const v = JSON.parse(d);
+              text += (anthropic ? v?.delta?.text : v?.choices?.[0]?.delta?.content) ?? "";
+              if (v?.usage) usage = v.usage;
+            } catch { /* 非 JSON 帧跳过 */ }
+          }
+        }
+      } else {
+        const body = await r.json().catch(() => ({}));
+        text = r.ok
+          ? (anthropic
+              ? (body?.content?.[0]?.text || JSON.stringify(body).slice(0, 400))
+              : (body?.choices?.[0]?.message?.content || JSON.stringify(body).slice(0, 400)))
+          : (body?.error?.message || JSON.stringify(body).slice(0, 300));
+        usage = body?.usage ?? null;
+      }
+      const tin = usage?.prompt_tokens ?? usage?.input_tokens ?? null;
+      const tout = usage?.completion_tokens ?? usage?.output_tokens ?? null;
+      const res = { ok: r.ok, status: r.status, ms: Date.now() - t0, text: String(text), stream: testStream, proto: testProto, usage, tin, tout };
+      setTestResult(res);
+      setTestHistory((h) => [res, ...h].slice(0, 5));
     } finally {
       setTestBusy(false);
     }
   });
 
   const endpoint = `http://127.0.0.1:${status?.port ?? 8081}/v1`;
+  const testCurl =
+    `curl ${endpoint}${testProto === "anthropic" ? "/messages" : "/chat/completions"} \\\n` +
+    `  -H "Authorization: Bearer <API_KEY>" \\\n` +
+    (testProto === "anthropic" ? `  -H "anthropic-version: 2023-06-01" \\\n` : "") +
+    `  -H "Content-Type: application/json" \\\n` +
+    `  -d '${JSON.stringify(buildTestBody())}'`;
   const curlSample =
     `curl ${endpoint}/chat/completions \\\n` +
     `  -H "Authorization: Bearer <API_KEY>" \\\n` +
@@ -418,6 +486,7 @@ export default function GatewayPage({ onOpenLogs }) {
             {status?.logs?.length
               ? <div className="x-log-list">
                   <div className="x-log-head">
+                    <span></span>
                     <span>{t("x.logColTs")}</span>
                     <span>{t("x.logColEp")}</span>
                     <span>{t("x.logColAcct")}</span>
@@ -537,32 +606,89 @@ export default function GatewayPage({ onOpenLogs }) {
       {testOpen
         ? <div className="pv-mask" onClick={() => setTestOpen(false)}>
             <div className="pv-panel x-test-panel" onClick={(e) => e.stopPropagation()}>
-              <div className="pv-title">{t("x.testTitle")}</div>
+              <div className="x-test-head">
+                <div className="pv-title">{t("x.testTitle")}</div>
+                <button className="btn-ghost x-test-close" onClick={() => setTestOpen(false)}>×</button>
+              </div>
               <div className="pv-sub">{t("x.testHint")}</div>
-              <label>{t("x.testModel")}</label>
+              <label className="x-test-label">{t("x.testProto")}</label>
+              <div className="lang-seg x-proto-seg">
+                <button className={"lang-opt" + (testProto === "openai" ? " on" : "")} onClick={() => setTestProto("openai")}>OpenAI</button>
+                <button className={"lang-opt" + (testProto === "anthropic" ? " on" : "")} onClick={() => setTestProto("anthropic")}>Anthropic</button>
+              </div>
+              <label className="x-test-label">{t("x.testModel")}</label>
               <select className="zcode-path" value={testModel}
                 onChange={(e) => setTestModel(e.target.value)}>
                 {(status?.models || [testModel]).filter(Boolean).map((m) =>
                   <option key={m} value={m}>{m}</option>)}
               </select>
-              <label style={{ marginTop: 10 }}>{t("x.testMsg")}</label>
+              <label className="x-test-label">{t("x.testSys")}</label>
+              <textarea className="zcode-path x-test-msg x-test-sys" value={testSys}
+                onChange={(e) => setTestSys(e.target.value)} rows={2} />
+              <label className="x-test-label">{t("x.testMsg")}</label>
               <textarea className="zcode-path x-test-msg" value={testMsg}
                 onChange={(e) => setTestMsg(e.target.value)} rows={3} />
-              <div className="pv-actions" style={{ justifyContent: "flex-start" }}>
-                <button className="btn-ghost has-ic" disabled={testBusy || !running} onClick={() => guard(doTestSend)}>
+              <div className="x-test-params">
+                <div className="x-test-param">
+                  <label className="x-test-label">{t("x.testMaxTok")}</label>
+                  <input className="zcode-path" type="number" min={1} max={8192} value={testMaxTok}
+                    onChange={(e) => setTestMaxTok(e.target.value)} />
+                </div>
+                <div className="x-test-param">
+                  <label className="x-test-label">{t("x.testTemp")}</label>
+                  <input className="zcode-path" type="number" min={0} max={2} step={0.1} value={testTemp}
+                    onChange={(e) => setTestTemp(e.target.value)} />
+                </div>
+                <div className="x-test-param">
+                  <label className="x-test-label">{t("x.testTopP")}</label>
+                  <input className="zcode-path" type="number" min={0} max={1} step={0.05} value={testTopP}
+                    onChange={(e) => setTestTopP(e.target.value)} />
+                </div>
+                <div className="x-test-param">
+                  <label className="x-test-label">{t("x.testStream")}</label>
+                  <button className={"tog-inline" + (testStream ? " on" : "")} role="switch" aria-checked={testStream}
+                    onClick={() => setTestStream(!testStream)}>
+                    <span className={"toggle" + (testStream ? " on" : "")} aria-hidden="true"><span className="knob" /></span>
+                    {testStream ? t("x.stream") : t("x.nonStream")}
+                  </button>
+                </div>
+              </div>
+              <div className="pv-actions x-test-actions">
+                <button className="btn-primary" disabled={testBusy || !running} onClick={() => guard(doTestSend)}>
                   {testBusy ? t("x.testSending") : t("x.testSend")}
                 </button>
+                <button className={"btn-ghost" + (testShowCode ? " x-btn-on" : "")} onClick={() => setTestShowCode(!testShowCode)}>curl</button>
                 <button className="btn-ghost" onClick={() => setTestOpen(false)}>{t("common.cancel")}</button>
               </div>
+              {testShowCode
+                ? <pre className="x-test-curl">{testCurl}</pre>
+                : null}
               {testResult
                 ? <>
-                    <label style={{ marginTop: 10 }}>{t("x.testResult")}</label>
+                    <label className="x-test-label">{t("x.testResult")}</label>
                     <div className={"x-test-out" + (testResult.ok ? "" : " bad")}>
                       <div className="x-test-meta">
-                        <span className={"dot " + (testResult.ok ? "ok" : "bad")} />
-                        HTTP {testResult.status} · {testResult.ms}ms
+                        <span className={"x-test-dot " + (testResult.ok ? "ok" : "bad")} />
+                        HTTP {testResult.status} · {testResult.ms}ms{testResult.stream ? ` · ${t("x.stream")}` : ""}
+                        {(testResult.tin != null || testResult.tout != null)
+                          ? ` · ${testResult.tout ?? 0}↑ / ${testResult.tin ?? 0}↓`
+                          : ""}
                       </div>
                       <div className="x-test-text">{testResult.text}</div>
+                    </div>
+                  </>
+                : null}
+              {testHistory.length > 1
+                ? <>
+                    <label className="x-test-label">{t("x.testHistory")}</label>
+                    <div className="x-test-hist">
+                      {testHistory.slice(1).map((h, i) => (
+                        <div key={i} className="x-test-hist-row">
+                          <span className={"x-test-dot " + (h.ok ? "ok" : "bad")} />
+                          <span className="x-test-hist-ms">{h.ms}ms</span>
+                          <span className="x-test-hist-text">{h.text.slice(0, 60)}</span>
+                        </div>
+                      ))}
                     </div>
                   </>
                 : null}

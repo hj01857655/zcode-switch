@@ -317,7 +317,16 @@ function EmptyState() {
 export default function App() {
   const s = useStore();
   const listRef = useRef(null);
-  const [view, setView] = useState("accounts");
+  const VIEWS = ["dashboard", "accounts", "gateway", "gatewayLogs", "referral", "settings", "about"];
+  // 记住上次停留的菜单：localStorage 是 WebView2 持久存储，重启应用恢复
+  const [view, setViewRaw] = useState(() => {
+    const v = localStorage.getItem("zsw.view");
+    return VIEWS.includes(v) ? v : "accounts";
+  });
+  const setView = (v) => {
+    try { localStorage.setItem("zsw.view", v); } catch { /* 存储被禁时只是不记忆 */ }
+    setViewRaw(v);
+  };
   // 设置页首次打开后保活，避免每次切换都重跑 get_state 等 IPC 造成卡顿
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   if (view === "settings" && !settingsLoaded) setSettingsLoaded(true);

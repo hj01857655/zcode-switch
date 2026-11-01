@@ -49,7 +49,8 @@ const fmtText = (s) => {
 function LogBlock({ label, raw, resp }) {
   const isJson = useMemo(() => { try { JSON.parse(String(raw).trim()); return true; } catch { return false; } }, [raw]);
   const isSse = useMemo(() => /^\s*event:|^\s*data: /m.test(String(raw)), [raw]);
-  const [fmt, setFmt] = useState("raw");
+  // 默认档：能解析就用 JSON，否则落原文
+  const [fmt, setFmt] = useState(isJson ? "json" : "raw");
   const opts = [
     ["raw", t("x.fmtRaw")],
     ...(isJson ? [["json", "JSON"]] : []),
@@ -101,6 +102,7 @@ function LogRow({ l }) {
   return (
     <div className={"x-log-item" + (hasDetail && open ? " expanded" : "")}>
       <div className={"x-log-row" + (hasDetail ? " clickable" : "")} onClick={() => hasDetail && setOpen(!open)}>
+        <span className={"x-log-caret" + (hasDetail ? (open ? " open" : "") : " none")}>▸</span>
         <span className="x-log-ts" title={new Date(l.ts).toLocaleString()}>{relTime(l.ts)}</span>
         <span className="x-log-ep">
           <span className={"x-log-method" + (epMethod(l.ep) === "GET" ? " get" : "")}>{epMethod(l.ep)}</span>
@@ -108,7 +110,7 @@ function LogRow({ l }) {
         </span>
         <span className="x-log-acct" title={l.account}>{l.account ?? "—"}</span>
         <span className="x-log-model">{l.model ?? "—"}</span>
-        <span className={"x-log-ms" + msTier(l.ms)}>{l.ms != null ? `${l.ms}ms` : "—"}</span>
+        <span className={"x-log-ms" + msTier(l.ms)} title={l.ttft != null ? `TTFT ${l.ttft}ms` : undefined}>{l.ms != null ? (l.stream && l.ttft != null ? `${l.ttft}/${l.ms}ms` : `${l.ms}ms`) : "—"}</span>
         <span className="x-log-tok" title={`${t("x.tokOut")} ${l.tout ?? 0} · ${t("x.tokIn")} ${l.tin ?? 0}`}>{(!l.tin && !l.tout) ? "—" : `${fmtTok(l.tout || 0)}↑/${fmtTok(l.tin || 0)}↓`}</span>
         <span className="x-log-cache" title={`${t("x.tokCacheR")} ${l.tcr ?? 0} · ${t("x.tokCacheW")} ${l.tcw ?? 0}`}>{(l.tcr || l.tcw) ? `${fmtTok(l.tcr || 0)}+${fmtTok(l.tcw || 0)}` : "—"}</span>
         <span className="x-log-stream">{l.stream != null ? (l.stream ? t("x.stream") : t("x.nonStream")) : "—"}</span>
@@ -120,11 +122,12 @@ function LogRow({ l }) {
         ? <div className="x-log-detail" onClick={(e) => e.stopPropagation()}>
             <div className="x-log-meta">
               <div className="x-log-tokens">
-                <span className="x-tok">↑ {t("x.tokIn")} {l.tin ?? 0}</span>
-                <span className="x-tok">↓ {t("x.tokOut")} {l.tout ?? 0}</span>
-                <span className={"x-tok" + ((l.tcr ?? 0) > 0 ? " hit" : "")}>⚡ {t("x.tokCacheR")} {l.tcr ?? 0}</span>
-                <span className={"x-tok" + ((l.tcw ?? 0) > 0 ? " hit" : "")}>✎ {t("x.tokCacheW")} {l.tcw ?? 0}</span>
-                <span className="x-tok">⏱ {l.ms != null ? `${l.ms}ms` : "—"}</span>
+                <span className="x-tok"><Ic name="tokIn" size={11} /> {t("x.tokIn")} {l.tin ?? 0}</span>
+                <span className="x-tok"><Ic name="tokOut" size={11} /> {t("x.tokOut")} {l.tout ?? 0}</span>
+                <span className={"x-tok" + ((l.tcr ?? 0) > 0 ? " hit" : "")}><Ic name="bolt" size={11} /> {t("x.tokCacheR")} {l.tcr ?? 0}</span>
+                <span className={"x-tok" + ((l.tcw ?? 0) > 0 ? " hit" : "")}><Ic name="pen" size={11} /> {t("x.tokCacheW")} {l.tcw ?? 0}</span>
+                <span className="x-tok"><Ic name="clock" size={11} /> {l.ms != null ? `${l.ms}ms` : "—"}</span>
+                {l.ttft != null ? <span className="x-tok" title="TTFT">⚡{l.ttft}ms</span> : null}
               </div>
               <button className="btn-ghost x-log-copy"
                 onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(JSON.stringify(l, null, 2)).catch(() => {}); }}>
@@ -135,13 +138,13 @@ function LogRow({ l }) {
               <span className="x-log-k">{t("x.logColModel")}</span><span className="x-log-v">{l.model ?? "—"}{l.stream != null ? ` · ${t(l.stream ? "x.stream" : "x.nonStream")}` : ""}</span>
               <span className="x-log-k">{t("x.logColAcct")}</span><span className="x-log-v">{l.account ?? "—"}</span>
               {l.attempt != null && l.attempt > 0 ? <><span className="x-log-k">{t("x.logAttempt")}</span><span className="x-log-v">{l.attempt + 1}</span></> : null}
-              <span className="x-log-k">{t("x.logColCode")}</span><span className={"x-log-v " + (l.ok ? "ok" : "fail")}>{l.status}</span>
+              <span className="x-log-k">{t("x.logColCode")}</span><span className={"x-log-v " + (l.ok ? "ok" : "fail")}>{l.status}{l.req_id ? <small style={{ marginLeft: 6, color: "var(--ink-mute)" }}>{l.req_id.slice(0, 8)}</small> : null}</span>
             </div>
             {l.err ? <div className="x-log-err">{l.err}</div> : null}
             <div className="x-log-blocks">
             {["req", "resp"].filter((k) => l[k]).map((k) => (
               <LogBlock key={k} resp={k === "resp"} raw={l[k]}
-                label={k === "req" ? t("x.logReq") : t("x.logResp")} />
+                label={k === "req" ? `${t("x.logReq")} · ${l.ep || ""}` : `${t("x.logResp")} · ${l.status ?? ""}`} />
             ))}
             </div>
           </div>
@@ -208,10 +211,18 @@ export default function GatewayLogsPage() {
   const stats = useMemo(() => {
     const v = filtered;
     const ok = v.filter((l) => l.ok).length;
+    // 延迟口径：分位数而非均值（业界惯例，均值被长尾拉偏）；TTFT 仅统计流式行
     const mss = v.map((l) => l.ms).filter((x) => typeof x === "number").sort((a, b) => a - b);
-    const p95 = mss.length ? mss[Math.min(mss.length - 1, Math.floor(mss.length * 0.95))] : null;
+    const ttfts = v.filter((l) => l.stream && typeof l.ttft === "number").map((l) => l.ttft).sort((a, b) => a - b);
+    const pct = (arr, q) => (arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * q))] : null);
     const sum = (k) => v.reduce((a, l) => a + (l[k] || 0), 0);
-    return { total: v.length, ok, fail: v.length - ok, p95, tin: sum("tin"), tout: sum("tout"), tcache: sum("tcr") + sum("tcw") };
+    return {
+      total: v.length, ok, fail: v.length - ok,
+      rate: v.length ? Math.round((ok / v.length) * 100) : null,
+      msP50: pct(mss, 0.5), msP95: pct(mss, 0.95),
+      ttftP50: pct(ttfts, 0.5), ttftP95: pct(ttfts, 0.95),
+      tin: sum("tin"), tout: sum("tout"), tcache: sum("tcr") + sum("tcw"),
+    };
   }, [filtered]);
 
   // 导出当前筛选结果为 JSON 文件
@@ -251,10 +262,27 @@ export default function GatewayLogsPage() {
             <div className="x-stat"><span className="x-stat-v">{stats.total}</span><span className="x-stat-k">{t("xl.total")}</span></div>
             <div className="x-stat"><span className="x-stat-v ok">{stats.ok}</span><span className="x-stat-k">{t("xl.ok")}</span></div>
             <div className="x-stat"><span className="x-stat-v fail">{stats.fail}</span><span className="x-stat-k">{t("xl.fail")}</span></div>
-            {stats.p95 != null
-              ? <div className="x-stat"><span className="x-stat-v">{stats.p95}<small>ms</small></span><span className="x-stat-k">p95</span></div>
+            {stats.rate != null
+              ? <div className="x-stat"><span className="x-stat-v">{stats.rate}<small>%</small></span><span className="x-stat-k">{t("xl.rate")}</span></div>
               : null}
           </div>
+          {stats.msP50 != null || stats.ttftP50 != null
+            ? <div className="x-ls-group">
+                <span className="x-ls-group-label">{t("xl.groupLat")}</span>
+                {stats.msP50 != null
+                  ? <div className="x-stat"><span className="x-stat-v">{stats.msP50}<small>ms</small></span><span className="x-stat-k" title={t("xl.latTotal")}>p50</span></div>
+                  : null}
+                {stats.msP95 != null
+                  ? <div className="x-stat"><span className="x-stat-v">{stats.msP95}<small>ms</small></span><span className="x-stat-k" title={t("xl.latTotal")}>p95</span></div>
+                  : null}
+                {stats.ttftP50 != null
+                  ? <div className="x-stat"><span className="x-stat-v">{stats.ttftP50}<small>ms</small></span><span className="x-stat-k" title="Time To First Token (stream, p50)">TTFT p50</span></div>
+                  : null}
+                {stats.ttftP95 != null
+                  ? <div className="x-stat"><span className="x-stat-v">{stats.ttftP95}<small>ms</small></span><span className="x-stat-k" title="Time To First Token (stream, p95)">TTFT p95</span></div>
+                  : null}
+              </div>
+            : null}
           <div className="x-ls-group">
             <span className="x-ls-group-label">{t("xl.groupTok")}</span>
             <div className="x-stat"><span className="x-stat-v">{fmtTok(stats.tin)}<small>↓</small></span><span className="x-stat-k">{t("x.tokIn")}</span></div>
@@ -282,6 +310,7 @@ export default function GatewayLogsPage() {
           : filtered.length
             ? <div className="x-log-list">
                 <div className="x-log-head">
+                  <span></span>
                   <span>{t("x.logColTs")}</span>
                   <span>{t("x.logColEp")}</span>
                   <span>{t("x.logColAcct")}</span>

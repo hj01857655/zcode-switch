@@ -12,7 +12,7 @@ A Tauri 2 desktop tool for one-click switching between multiple ZCode accounts, 
 - **Add accounts**: OAuth login for new accounts inside the tool (BigModel / z.ai entries), never touching the current login
 - **Quota display**: inline plan quota and reset time per account row, multi-plan grouping; a dashboard page summarizes everything
 - **Claim promotions**: one-click claim for eligible promotions; "Auto claim" toggle (off by default) checks and claims periodically — manual actions take priority
-- **Local gateway**: OpenAI-compatible reverse proxy that translates any OpenAI SDK request into the ZCode model endpoint protocol (`http://127.0.0.1:8081/v1`); multi-account pool with rotation and cooldown, request logs (raw/JSON/body/SSE views), gateway tuning modal, test-request panel; see [docs/GATEWAY.md](docs/GATEWAY.md)
+- **Local gateway**: OpenAI-compatible reverse proxy that translates any OpenAI SDK request into the ZCode model endpoint protocol (`http://127.0.0.1:8081/v1`); multi-account pool with rotation and cooldown, request logs (raw/JSON/body/SSE views), gateway tuning modal, smoke-test modal (protocol switch / system prompt / parameters / streaming / curl preview); see [docs/GATEWAY.md](docs/GATEWAY.md)
 - **Referral program**: bind an invite code, view my code with share link (copies the full URL), and track referral task progress
 - **Encrypted import / export**: `.zsb` bundle, PBKDF2(600k) + AES-256-GCM password encryption
 - **Bilingual UI (中文 / English)**: one-click switch in Settings — main window, tray, error messages and CLI output all covered; first run follows your OS language
