@@ -2,7 +2,7 @@
 
 > 目标：在 zcode-switch（Tauri）内嵌 OpenAI/Anthropic 兼容反代，复用本工具现成的多号凭据体系，替代旁挂 `ZCode2api-go` 独立进程。
 > 参考实现：`ZCode2api-go`（Go，~2.6k 行，协议已验证）。本文是其 Rust 翻译的设计与分解。
-> 状态（2026-10-31）：M1 落地；M2 已编译，真实出话由 M3-E Python 同构复刻验收（薄头集 200 出话，见 §6.5）；M3 OpenAI 转换器已接 `/v1/chat/completions`（非流式+SSE）；多号池 `pool.rs` 已接线 server.rs（未 e2e）。注意：OpenAI 转换器存在双实现（`openai.rs` 主实现，`translate.rs` 内为早期副本待撤），server.rs 当前挂的仍是 `translate.rs` 版——收敛后以 `openai.rs` 为准。
+> 状态（2026-11-01）：M1-M3 全部落地；OpenAI 转换器已收敛到 `openai.rs` 唯一实现（translate.rs 只留 Anthropic 侧供 /v1/messages 与 /v1/responses），`server.rs` 全部挂 `openai.rs`；多号池已接线并经网关 e2e 验收（gatewayd 非流式+流式真实出话）；`src/bin/gatewayd.rs` 提供无 Tauri 的无头启动。
 
 ## 0. 一页结论
 
@@ -38,7 +38,7 @@ Go 版对应物：`server.go`（路由+鉴权）、`anthropic.go`（222 行）�
 
 - **进程内常驻线程**：托盘模式照常服务；窗口关闭不影响（`close_to_tray` 已有）。
 - **凭据复用**：`~/.zcode-switch/accounts/*.json`（enc:v1 解密、`virtual_device_mid`）直接读，与切号共用一份真源——不引 Go 版的 `zcode_devices.json` 第二份落盘。
-- **身份块**：system 前缀（seg0+seg1，来自 `prefix.json` 快照）+ `metadata.user_id` + trace 头，照抄 Go 版 `translate.go:151` 的白名单逻辑。**前缀快照需跟随 ZCode 大版本重新提取**（Go 版 `assets/prefix.json` 标注提取自 3.16.3，升 3.17.1 后未验证是否漂移——首个实测项）。
+- **身份块**：system 前缀（seg0+seg1，来自 `prefix.json` 快照）+ `metadata.user_id` + trace 头，照抄 Go 版 `translate.go:151` 的白名单逻辑。**前缀快照跟随 ZCode 大版本重新校准**：漂移已验证（3.17.1 新前缀不被白名单认，见 §6.1），gateway 内嵌 3.16.3 主线快照，主线失效（3012）才重新提取。
 
 ## 3. 多号池（对照 Go 版 `pool.go` + `client.go:134`）
 
@@ -53,7 +53,7 @@ Go 版对应物：`server.go`（路由+鉴权）、`anthropic.go`（222 行）�
 
 策略：失败换下一号，冷却期内跳过；全部耗尽回 503。`window_test.go` 里有窗口调度测试，Rust 版同构。
 
-**落地状态（2026-10-31）**：`pool.rs` 已实现（`Farm`：成员列表 + 粘性游标 + 冷却表 + `global_backoff` 全局退避；`settle` 失败才挪游标），`server.rs` 发送路径已接线（`farm_members` 取号 → 发送 → `settle` 落冷却/换号，`is_global_risk` 触发全池退避）。多号切换端到端未跑真实验收。
+**落地状态（2026-11-01）**：`pool.rs` 已实现（`Farm`：成员列表 + 粘性游标 + 冷却表 + `global_backoff` 全局退避；`settle` 失败才挪游标），`server.rs` 发送路径已接线；经 gatewayd e2e 验收（非流式+流式真实出话，farm 选号参与）。失败换号/冷却/全局退避路径未实测。
 
 ## 4. 模块分解（Rust 侧新增）
 
@@ -61,10 +61,13 @@ Go 版对应物：`server.go`（路由+鉴权）、`anthropic.go`（222 行）�
 src-tauri/src/gateway/
   mod.rs        — GatewayCtl：启停线程、状态共享（AtomicBool + 端口/密钥配置）
   server.rs     — axum 路由 + Bearer 鉴权 + health + /v1/chat/completions、/v1/messages 接线
-  translate.rs  — anthropic 直通（M2）+ OpenAI 转换（M3 早期副本，待撤，收敛到 openai.rs）
-  openai.rs     — OpenAI chat/completions ⇄ anthropic 主实现：tool_calls/视觉(data:image)/tool_result、
-                  Delta 流式语义（translate_sse_line）+ 帧构造（completion_frame/chunk_frame）
+  translate.rs  — anthropic 直通（/v1/messages）+ anthropic 原生形态聚合（/v1/messages、/v1/responses 共用）；
+                  OpenAI 转换已全部收敛到 openai.rs
+  openai.rs     — OpenAI chat/completions ⇄ anthropic 唯一实现：tool_calls/视觉(data:image)/tool_result、
+                  Delta 流式语义（translate_sse_line）+ 非流式聚合（aggregate_sse_to_openai）+ 流式装配器（OpenAiStream）
   pool.rs       — 多号轮询 + 冷却 + 全局退避（读 store 凭据，已接线 server.rs）
+  bin/gatewayd.rs — 无头启动入口：读 gateway.json（ZCODE_GATEWAY_PORT / ZCODE_GATEWAY_API_KEY 可覆盖），
+                  不起 Tauri 直接 serve（e2e 验收 / 服务器部署用）
   upstream.rs   — z.ai messages 客户端（reqwest，非流式聚合 + bytes_stream 流式；冷却表）
 ```
 
@@ -95,7 +98,7 @@ src-tauri/src/gateway/
 | M1 | 服务骨架：axum 起停 + `/v1/models` 静态列表 + Bearer 鉴权 + UI 按钮接线 | ✅ 已验（curl 401/200） |
 | M2 | Anthropic messages 非流式：直通 + 前缀注入，真实出话 | ✅ 已验（Python 同构 200 出话） |
 | M3 | OpenAI chat/completions 非流式 + 流式 SSE | ✅ 已验（多轮出 "5"、流式 42 chunk 出 "收到"） |
-| M4 | /v1/responses + /v1/messages SSE 透传 + pool.rs 多号农场 | ✅ 已落（编译绿；端到端待客户端实测） |
+| M4 | /v1/responses + /v1/messages SSE 透传 + pool.rs 多号农场 | ✅ 已落（编译绿；/v1/chat/completions 已整链验收，messages 直通与 responses 未经 axum 整链实测） |
 | M5 | 面板请求日志/池可视化接线（pool 状态 → twoapi_status 扩展） | 未开工 |
 
 ## 6. 风险与前置
@@ -104,12 +107,13 @@ src-tauri/src/gateway/
 2. **SSE 转换正确性**：三种客户端方言的流式事件差异（`[DONE]` vs events vs message_stop），需逐客户端实测。
 3. **验证码管道存在、当前豁免（2026-10-31 反编译+实测定案）**：官方客户端在 start-plan 模式（`access.type===zhipu-account && access.mode===start-plan`）下，每次模型请求前会按 `client/configs` 的 `captcha` 配置解无痕验证码，把 `X-Aliyun-Captcha-Verify-Param/-Region` 作为 runtime headers 附到 messages 请求上（`send_preflight` 主动 + `captcha-retry` 被挑战后重试两源）。但当前服务端配置 `skip_model_request: true`（2026-10-31 实拉 client/configs），LOt 走豁免分支返回空 headers——今天的 chat 就是 Bearer + 版本头裸打。该豁免是服务端一行遥控配置：反代侧留一个探测点，定期拉 `client/configs` 读 `captcha.skip_model_request`，翻 false 时报警（届时接入 captcha_solve.js 同款无痕取票逻辑挂进 messages 头——取票参数与 claim 同一套：prefix `no8xfe`、region `cn`、sceneId `11xygtvd`，票值塞进 `X-Aliyun-Captcha-Verify-Param` + `X-Aliyun-Captcha-Region: cn`，挂点在 `upstream::headers()`）。在那之前：429/3012 不验证码，靠池冷却规避；出现 3007 类交互要求直接回错误（冷却表已有 3007→60s 兜底，见 §3）。
 4. **Tauri 常驻线程与打包**：axum 在 Tauri runtime 里跑 tokio，注意端口占用冲突检测（与 dev 的 5173、zclaim 的 7861 错开）。
-5. **头集最终形态（版本豁免档定案，2026-11-01）**：messages 头集 = **整套官方头族，版本钉死 3.16.3**（`upstream.rs SAFE_APP_VERSION`，`ZCODE_GATEWAY_APP_VERSION` 可覆盖做归因实验）。WAF 扳机不是「自报版本」这个行为，而是**特定版本号 3.17.1 的自述**：`User-Agent: ZCode/3.17.1` 与 `X-ZCode-App-Version: 3.17.1` 两条均单条实锤 3012/405，其余 13 条头全部单发验证安全；换版本号即活——`ZCode/3.14.0` UA、`X-ZCode-App-Version: 3.14.0` 各一发 200，**全头族（UA+版本族+Referer/Title+X-Device-Mid+x-request-id+anthropic-version）钉 3.16.3 → 200**。这也回头解释了历史：claim 通道最早钉 3.14.0 不是迷信，是真有豁免档。billing/touch 通道不受影响（那边 3.17.1 头才能拿投放，仍走 quota.rs 真实探测值）。
+5. **头集最终形态（版本闸定案，2026-11-01）**：messages 头集 = **整套官方头族，版本钉死 3.16.3**（`upstream.rs SAFE_APP_VERSION`，`ZCODE_GATEWAY_APP_VERSION` 可覆盖做归因实验）。`User-Agent` 与 `X-ZCode-App-Version` 自报 3.17.1 回 3012/405（均单条实锤），自报 3.14.0/3.16.3 均 200——全头族（UA+版本族+Referer/Title+X-Device-Mid+x-request-id+anthropic-version）钉 3.16.3 → 200；其余 13 条头逐组/单发验证均 200。claim/billing/touch 通道相反，要求 3.17.1 真实版本头（见 [APP-VERSION.md](APP-VERSION.md)）。
    - 与 body 的代际自洽：主线前缀白名单同样锚定 3.16.3（见第 1 条），头版本 3.16.3 + 主线前缀是同一代际组合。
-   - `cache_control` 与 `metadata.user_id` JSON 串形状各形态均被接受，保留。ⓘ M2 e2e 在协议层闭环（farm 选号→translate→上游→SSE 聚合全链 200 出话），经 axum 服务的整链路验证待真实客户端接入时顺带完成。
+   - 自动降级闩（`upstream.rs note_risk_response`）：SAFE 自述撞 405/3012 时进程内锁存切 3.14.0（该自述单头实测 200 档），下一发请求生效、失败那发不重试；`ZCODE_GATEWAY_APP_VERSION` 手动钉版本时闩不介入，不自动回升。
+   - `cache_control` 与 `metadata.user_id` JSON 串形状各形态均被接受，保留。ⓘ chat/completions 已经 axum 整链验收（gatewayd，2026-11-01，非流式+流式真实出话）；messages 直通与 responses 的整链实测待补。
 
-   **归因时间线（历史记录，结论以上面定案为准）**：
-   - **M3-E（2026-10-31）**：Python 同构复刻仅带 `Authorization: Bearer` + `Content-Type` 两条头（无 UA、无版本头族）、system 无 `cache_control`、`metadata.user_id` 用 JSON 内嵌串——真实 200 出话。证明「薄头 + 对齐的 body = 200」；当时「头集不是 3012 胜负手」的推论后来被修正——它从未测全头族。
-   - **新头集首打 3012（2026-10-31 23:5x，`scripts/farm_probe.py`）**：头族全开（`ZCode/3.17.1` UA + 版本头族 + `X-Device-Mid`）+ 主线前缀带 `cache_control`，单发即 405/3012。
-   - **逐组 bisect（2026-11-01，`scripts/header_bisect.py` + `version_family_bisect.py`，三轮 6 发 + 族内二分 4 发）**：薄头基线 → 200；叠加 UA:ZCode/3.17.1 单条 → 3012；无 UA 叠版本头族 → 3012；Referer/Title、X-Device-Mid、x-request-id、anthropic-version 逐组叠加全 200；族内二分定位 `X-ZCode-App-Version` 单条；收尾对照薄头+族内其余 6 条（不含定罪头）→ 200 全洗清。当时结论「版本自述 vs 非 Chromium TLS 指纹矛盾」后被版本豁免档实验修正为「3.17.1 特定版本号判定」。
-   - **版本豁免档收口（2026-11-01）**：`ZCode/3.14.0` 两条扳机头各一发 200、全头族钉 3.16.3 一发 200（同轮薄头 base 对照 200）——WAF 拦的是 3.17.1 自报，不是版本自述行为本身。
+   **归因时间线（2026-10-31 → 11-01，实测记录）**：
+   - M3-E（10-31）：仅 `Authorization: Bearer` + `Content-Type` 两条头、system 无 `cache_control`、`metadata.user_id` JSON 内嵌串——真实 200 出话。
+   - 全头族（`ZCode/3.17.1` UA + 版本头族 + `X-Device-Mid`）+ 主线前缀带 `cache_control` → 405/3012（10-31 23:5x，`scripts/farm_probe.py`）。
+   - 逐组 bisect（11-01，`scripts/header_bisect.py` + `version_family_bisect.py`）：薄头基线 → 200；叠加 `UA:ZCode/3.17.1` 单条 → 3012；无 UA 叠版本头族 → 3012；`HTTP-Referer`/`X-Title`、`X-Device-Mid`、`x-request-id`、`anthropic-version` 逐组叠加全 200；族内二分定位 `X-ZCode-App-Version` 单条 → 3012；薄头+族内其余 6 条 → 200。
+   - 版本豁免档（11-01）：`UA:ZCode/3.14.0`、`X-ZCode-App-Version: 3.14.0` 各一发 200；全头族钉 3.16.3 → 200（同轮薄头对照 200）。

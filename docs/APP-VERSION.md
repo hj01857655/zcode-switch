@@ -11,7 +11,7 @@
 
 请求头里 `User-Agent: ZCode/<ver>` 与 `X-ZCode-App-Version: <ver>` 同源，由 `zai_headers_with_version` 统一拼装（`quota.rs:203`）。
 
-## 通道矩阵（全部走探测值）
+## 通道矩阵（按通道取版本源）
 
 | 通道 | 生效位置 |
 |---|---|
@@ -26,13 +26,12 @@
 
 ## 历史
 
-- 2026-10-30（P0）：修复 `CLIENT_APP_VERSION` 硬编码过时（本机实际装 3.16.3，注册表实测）、OAuth 与 billing 双版本源并存的一致性隐患。
-- 2026-10-30（P0）：修复 `CLIENT_APP_VERSION` 硬编码过时（本机实际装 3.16.3，注册表实测）、OAuth 与 billing 双版本源并存的一致性隐患；当时把领取通道拆成专用头钉 3.14.0 以求「防 3012」。
-- 2026-10-31：实测推翻钉死设计——版本头不影响 preview 下发（3.14.0/3.16.3/3.17.1 响应逐字节相同，3012 与版本头无关），3.17.1 头 + URL 直打 `billing/claim` 连续 12 个账号全部 200，而 3.14.0 头 claim 一律回 1004。删除 `CLAIM_APP_VERSION` 与 `zai_claim_headers_with_mid`，全部通道版本源归一至探测值。
-- 2026-11-01：messages 端点豁免档定案——WAF 扳机是 `User-Agent` / `X-ZCode-App-Version` 两条头携带的**特定版本号 3.17.1**（单条实锤 3012/405，scripts/header_bisect.py + version_family_bisect.py）；3.14.0/3.16.3 自述均 200，全头族钉 3.16.3 → 200。gateway `upstream.rs` 据此钉 3.16.3。注意与 10-31 结论并不矛盾：那是 claim/billing 链（版本无关），这是 messages 链（版本敏感），两链口径勿互推。
+- 2026-10-30（P0）：修复 `CLIENT_APP_VERSION` 硬编码过时（注册表实测本机 3.16.3）；OAuth 与 billing 版本源归一。
+- 2026-10-31：preview 下发与版本头无关（3.14.0/3.16.3/3.17.1 响应逐字节相同）；`billing/claim` 以 3.17.1 头连续 12 个账号全部 200，3.14.0 头一律回 1004——claim/touch 通道要求 3.17.1 真实版本头。删除 `CLAIM_APP_VERSION` 与 `zai_claim_headers_with_mid`，版本源归一至探测值。
+- 2026-11-01：messages 端点版本闸定案——`User-Agent` / `X-ZCode-App-Version` 自报 3.17.1 回 3012/405，自报 3.14.0/3.16.3 均 200；gateway `upstream.rs` 据此以 `SAFE_APP_VERSION` 钉 3.16.3。
 
 ## 维护守则
 
 - **ZCode 升级**：只改 `CLIENT_APP_VERSION` 兜底值，探测自动跟随实际安装
-- **不要再给任何通道加专用版本常量**：除非有「该通道版本头换成 X → 明确报错 Y」的对照实验记录（messages 端点即是凭此例外钉 3.16.3 的）
+- **不要再给任何通道加专用版本常量**：除非有「该通道版本头换成 X → 明确报错 Y」的对照实验记录（messages 端点即凭此记录钉 3.16.3）
 - 探测结果 `OnceLock` 缓存于进程生命周期，ZCode 升级后本工具需重启才会用新版本号（已知限制，P2）
