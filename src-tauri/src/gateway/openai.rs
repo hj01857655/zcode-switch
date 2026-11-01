@@ -298,7 +298,8 @@ pub enum Delta {
     Finish(String),
     /// message_delta 同时携带 finish 与 output usage
     FinishUsage { finish: String, output: i64 },
-    Usage { input: i64, output: i64 },
+    /// cache_read/cache_write 来自上游 usage 的 cache_read_input_tokens / cache_creation_input_tokens
+    Usage { input: i64, output: i64, cache_read: i64, cache_write: i64 },
     Error(String),
 }
 
@@ -317,7 +318,18 @@ pub fn translate_sse_line(payload: &str) -> Option<Delta> {
                 .pointer("/message/usage/input_tokens")
                 .and_then(|x| x.as_i64())
                 .unwrap_or(0);
-            Some(Delta::Usage { input, output: 0 })
+            Some(Delta::Usage {
+                input,
+                output: 0,
+                cache_read: ev
+                    .pointer("/message/usage/cache_read_input_tokens")
+                    .and_then(|x| x.as_i64())
+                    .unwrap_or(0),
+                cache_write: ev
+                    .pointer("/message/usage/cache_creation_input_tokens")
+                    .and_then(|x| x.as_i64())
+                    .unwrap_or(0),
+            })
         }
         Some("content_block_start") => {
             let block = ev.get("content_block")?;
@@ -365,7 +377,17 @@ pub fn translate_sse_line(payload: &str) -> Option<Delta> {
 }
 
 /// 非流式聚合结果 → OpenAI chat.completion 帧
-pub fn completion_frame(id: &str, model: &str, text: &str, reasoning: &str, finish: &str, input: i64, output: i64) -> Value {
+pub fn completion_frame(
+    id: &str,
+    model: &str,
+    text: &str,
+    reasoning: &str,
+    finish: &str,
+    input: i64,
+    output: i64,
+    cache_read: i64,
+    cache_write: i64,
+) -> Value {
     let mut message = json!({ "role": "assistant", "content": text });
     if !reasoning.is_empty() {
         message["reasoning_content"] = json!(reasoning);
@@ -374,7 +396,12 @@ pub fn completion_frame(id: &str, model: &str, text: &str, reasoning: &str, fini
         "id": id, "object": "chat.completion",
         "created": chrono::Utc::now().timestamp(), "model": model,
         "choices": [{ "index": 0, "message": message, "finish_reason": finish }],
-        "usage": { "prompt_tokens": input, "completion_tokens": output, "total_tokens": input + output },
+        "usage": {
+            "prompt_tokens": input, "completion_tokens": output, "total_tokens": input + output,
+            // OpenAI 原生缓存位；cache_creation_input_tokens 为扩展字段，保留上游写缓存数据
+            "prompt_tokens_details": { "cached_tokens": cache_read },
+            "cache_creation_input_tokens": cache_write,
+        },
     })
 }
 
@@ -401,6 +428,8 @@ pub fn aggregate_sse_to_openai(raw: &str, model: &str) -> Value {
     let mut finish = "stop".to_string();
     let mut input = 0i64;
     let mut output = 0i64;
+    let mut cache_read = 0i64;
+    let mut cache_write = 0i64;
     // index → (call_id, name, arguments)
     let mut tools: std::collections::BTreeMap<usize, (String, String, String)> = Default::default();
     for line in raw.lines() {
@@ -427,7 +456,11 @@ pub fn aggregate_sse_to_openai(raw: &str, model: &str) -> Value {
                 finish = f;
                 output = o;
             }
-            Some(Delta::Usage { input: i, .. }) => input = i,
+            Some(Delta::Usage { input: i, cache_read: cr, cache_write: cw, .. }) => {
+                input = i;
+                cache_read = cr;
+                cache_write = cw;
+            }
             _ => {}
         }
     }
@@ -439,6 +472,8 @@ pub fn aggregate_sse_to_openai(raw: &str, model: &str) -> Value {
         &finish,
         input,
         output,
+        cache_read,
+        cache_write,
     );
     if !tools.is_empty() {
         let arr: Vec<Value> = tools
@@ -469,6 +504,8 @@ pub struct OpenAiStream {
     finish: String,
     usage_in: i64,
     usage_out: i64,
+    usage_cr: i64,
+    usage_cw: i64,
 }
 
 impl OpenAiStream {
@@ -481,6 +518,8 @@ impl OpenAiStream {
             finish: "stop".into(),
             usage_in: 0,
             usage_out: 0,
+            usage_cr: 0,
+            usage_cw: 0,
         }
     }
 
@@ -495,8 +534,10 @@ impl OpenAiStream {
                     None => continue,
                 };
                 match translate_sse_line(data) {
-                    Some(Delta::Usage { input, .. }) => {
+                    Some(Delta::Usage { input, cache_read, cache_write, .. }) => {
                         self.usage_in = input;
+                        self.usage_cr = cache_read;
+                        self.usage_cw = cache_write;
                         if !self.role_sent {
                             self.role_sent = true;
                             out.push_str(&chunk_frame(
@@ -562,7 +603,11 @@ impl OpenAiStream {
             "created": chrono::Utc::now().timestamp(),
             "model": self.model,
             "choices": [{ "index": 0, "delta": {}, "finish_reason": self.finish }],
-            "usage": { "prompt_tokens": self.usage_in, "completion_tokens": self.usage_out, "total_tokens": self.usage_in + self.usage_out },
+            "usage": {
+                "prompt_tokens": self.usage_in, "completion_tokens": self.usage_out, "total_tokens": self.usage_in + self.usage_out,
+                "prompt_tokens_details": { "cached_tokens": self.usage_cr },
+                "cache_creation_input_tokens": self.usage_cw,
+            },
         });
         out.push_str(&format!("data: {final_chunk}\n\n"));
         out.push_str(sse_done());
@@ -663,5 +708,24 @@ mod tests {
         assert_eq!(out["choices"][0]["message"]["reasoning_content"], "想");
         assert_eq!(out["choices"][0]["finish_reason"], "stop");
         assert_eq!(out["usage"]["total_tokens"], 11);
+    }
+
+    #[test]
+    fn usage_cache_fields_flow_through() {
+        let sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9,\"cache_read_input_tokens\":7,\"cache_creation_input_tokens\":3}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"好\"}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n",
+        );
+        // 非流式：缓存进 prompt_tokens_details.cached_tokens + cache_creation_input_tokens
+        let out = aggregate_sse_to_openai(sse, "GLM-5.3-Flash");
+        assert_eq!(out["usage"]["prompt_tokens_details"]["cached_tokens"], 7);
+        assert_eq!(out["usage"]["cache_creation_input_tokens"], 3);
+        // 流式：末帧 usage 同形
+        let mut s = OpenAiStream::new("GLM-5.3-Flash");
+        let _ = s.feed(sse);
+        let fin = s.finish();
+        assert!(fin.contains("\"cached_tokens\":7"));
+        assert!(fin.contains("\"cache_creation_input_tokens\":3"));
     }
 }

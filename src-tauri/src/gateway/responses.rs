@@ -201,8 +201,8 @@ pub fn responses_to_upstream(req: &Value) -> Result<Value, String> {
 }
 
 /// 非流式聚合 → Responses response 对象
-pub fn responses_object(id: &str, model: &str, text: &str, status: &str, input: i64, output: i64) -> Value {
-    responses_object_with_tools(id, model, text, status, input, output, None)
+pub fn responses_object(id: &str, model: &str, text: &str, status: &str, input: i64, output: i64, cache_read: i64) -> Value {
+    responses_object_with_tools(id, model, text, status, input, output, cache_read, None)
 }
 
 /// 流内 function_call 块聚合（Go server.go toolAccum 同构），含稳定的下游 item id
@@ -276,6 +276,7 @@ pub fn responses_object_with_tools(
     status: &str,
     input: i64,
     output: i64,
+    cache_read: i64,
     tools: Option<&ToolAccum>,
 ) -> Value {
     let mut content: Vec<Value> = vec![];
@@ -305,7 +306,7 @@ pub fn responses_object_with_tools(
         "output": output_arr,
         "usage": {
             "input_tokens": input, "output_tokens": output, "total_tokens": input + output,
-            "input_tokens_details": { "cached_tokens": 0 },
+            "input_tokens_details": { "cached_tokens": cache_read },
             "output_tokens_details": { "reasoning_tokens": 0 },
         },
     })
@@ -317,6 +318,7 @@ pub fn aggregate_sse_to_responses(raw: &str, model: &str) -> Value {
     let mut tools = ToolAccum::new();
     let mut input = 0i64;
     let mut output = 0i64;
+    let mut cache_read = 0i64;
     for line in raw.lines() {
         let data = match line.strip_prefix("data: ") {
             Some(d) => d.trim(),
@@ -326,13 +328,16 @@ pub fn aggregate_sse_to_responses(raw: &str, model: &str) -> Value {
             Some(Delta::Content(s)) => text.push_str(&s),
             Some(Delta::ToolStart { index, id, name }) => tools.add_start(index, &id, &name),
             Some(Delta::ToolArgs { index, args }) => tools.add_args(index, &args),
-            Some(Delta::Usage { input: i, .. }) => input = i,
+            Some(Delta::Usage { input: i, cache_read: cr, .. }) => {
+                input = i;
+                cache_read = cr;
+            }
             Some(Delta::FinishUsage { output: o, .. }) => output = o,
             _ => {}
         }
     }
     let id = format!("resp_{}", &uuid::Uuid::new_v4().simple().to_string()[..24]);
-    responses_object_with_tools(&id, model, &text, "completed", input, output, Some(&tools))
+    responses_object_with_tools(&id, model, &text, "completed", input, output, cache_read, Some(&tools))
 }
 
 fn sse_frame(v: &Value) -> String {
@@ -355,6 +360,7 @@ pub struct ResponsesStream {
     tools: ToolAccum,
     usage_in: i64,
     usage_out: i64,
+    usage_cr: i64,
 }
 
 impl ResponsesStream {
@@ -363,7 +369,7 @@ impl ResponsesStream {
         let mid = format!("msg_{}", &uuid::Uuid::new_v4().simple().to_string()[..24]);
         let pending = sse_frame(&json!({
             "type": "response.created",
-            "response": responses_object(&rid, model, "", "in_progress", 0, 0),
+            "response": responses_object(&rid, model, "", "in_progress", 0, 0, 0),
         })) + &sse_frame(&json!({
             "type": "response.output_item.added", "output_index": 0,
             "item": { "id": mid, "type": "message", "status": "in_progress",
@@ -379,6 +385,7 @@ impl ResponsesStream {
             tools: ToolAccum::new(),
             usage_in: 0,
             usage_out: 0,
+            usage_cr: 0,
         }
     }
 
@@ -398,7 +405,10 @@ impl ResponsesStream {
                     None => continue,
                 };
                 match translate_sse_line(data) {
-                    Some(Delta::Usage { input, .. }) => self.usage_in = input,
+                    Some(Delta::Usage { input, cache_read, .. }) => {
+                        self.usage_in = input;
+                        self.usage_cr = cache_read;
+                    }
                     Some(Delta::FinishUsage { output, .. }) => self.usage_out = output,
                     Some(Delta::Content(t)) => {
                         self.text.push_str(&t);
@@ -454,7 +464,7 @@ impl ResponsesStream {
         })));
         let obj = responses_object_with_tools(
             &self.rid, &self.model, &self.text, "completed", self.usage_in, self.usage_out,
-            Some(&self.tools),
+            self.usage_cr, Some(&self.tools),
         );
         out.push_str(&sse_frame(&json!({ "type": "response.completed", "response": obj })));
         out

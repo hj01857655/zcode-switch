@@ -330,33 +330,58 @@ const LOG_REQ_CAP: usize = 8192;
 const LOG_RESP_CAP: usize = 16384;
 
 /// 从聚合后的响应文本提取 usage：输入 / 输出 / 缓存读 / 缓存写。
-/// 两种形态：非流式路径存的是聚合 JSON（顶层 /usage），流式路径存的是 SSE 全文
-/// （message_start 带 /message/usage，message_delta 带 /usage）。
+/// 响应文本两种载体：非流式路径存聚合 JSON（顶层 /usage），流式路径存 SSE 全文
+/// （anthropic 的 message_start/message_delta，openai/responses 的逐帧 /usage）。
+/// 字段名三套别名：anthropic（input_tokens/cache_read_input_tokens/…）、
+/// chat（prompt_tokens/completion_tokens/prompt_tokens_details.cached_tokens）、
+/// responses（input_tokens/output_tokens/input_tokens_details.cached_tokens）。
+fn usage_get(u: &Value, k: &str) -> Option<i64> {
+    u.get(k).and_then(|x| x.as_i64())
+}
+
+fn usage_in(u: &Value) -> Option<i64> {
+    usage_get(u, "input_tokens").or_else(|| usage_get(u, "prompt_tokens"))
+}
+
+fn usage_out(u: &Value) -> Option<i64> {
+    usage_get(u, "output_tokens").or_else(|| usage_get(u, "completion_tokens"))
+}
+
+fn usage_cache_read(u: &Value) -> Option<i64> {
+    usage_get(u, "cache_read_input_tokens")
+        .or_else(|| u.pointer("/input_tokens_details/cached_tokens").and_then(|x| x.as_i64()))
+        .or_else(|| u.pointer("/prompt_tokens_details/cached_tokens").and_then(|x| x.as_i64()))
+}
+
+fn usage_cache_write(u: &Value) -> Option<i64> {
+    usage_get(u, "cache_creation_input_tokens")
+}
+
 fn extract_usage(resp: Option<&String>) -> (i64, i64, i64, i64) {
     let Some(raw) = resp else { return (0, 0, 0, 0) };
     let mut tin = 0i64;
     let mut tout = 0i64;
     let mut tcr = 0i64;
     let mut tcw = 0i64;
-    // 形态一：整段是聚合 JSON（非流式路径）
+    // 载体一：整段是聚合 JSON（非流式路径）
     if let Ok(v) = serde_json::from_str::<Value>(raw.trim()) {
         if let Some(u) = v.get("usage").filter(|u| u.is_object()) {
-            if let Some(x) = u.get("input_tokens").and_then(|x| x.as_i64()) { tin = x; }
-            if let Some(x) = u.get("output_tokens").and_then(|x| x.as_i64()) { tout = x; }
-            if let Some(x) = u.get("cache_read_input_tokens").and_then(|x| x.as_i64()) { tcr = x; }
-            if let Some(x) = u.get("cache_creation_input_tokens").and_then(|x| x.as_i64()) { tcw = x; }
+            if let Some(x) = usage_in(u) { tin = x; }
+            if let Some(x) = usage_out(u) { tout = x; }
+            if let Some(x) = usage_cache_read(u) { tcr = x; }
+            if let Some(x) = usage_cache_write(u) { tcw = x; }
             return (tin, tout, tcr, tcw);
         }
     }
-    // 形态二：SSE 全文逐行（流式路径）
+    // 载体二：SSE 全文逐行（流式路径）
     for line in raw.lines() {
         let Some(d) = line.strip_prefix("data: ") else { continue };
         let Ok(v) = serde_json::from_str::<Value>(d.trim()) else { continue };
         let Some(u) = v.pointer("/message/usage").or_else(|| v.pointer("/usage")) else { continue };
-        if let Some(x) = u.get("input_tokens").and_then(|x| x.as_i64()) { tin = x; }
-        if let Some(x) = u.get("output_tokens").and_then(|x| x.as_i64()) { tout = x; }
-        if let Some(x) = u.get("cache_read_input_tokens").and_then(|x| x.as_i64()) { tcr = x; }
-        if let Some(x) = u.get("cache_creation_input_tokens").and_then(|x| x.as_i64()) { tcw = x; }
+        if let Some(x) = usage_in(u) { tin = x; }
+        if let Some(x) = usage_out(u) { tout = x; }
+        if let Some(x) = usage_cache_read(u) { tcr = x; }
+        if let Some(x) = usage_cache_write(u) { tcw = x; }
     }
     (tin, tout, tcr, tcw)
 }

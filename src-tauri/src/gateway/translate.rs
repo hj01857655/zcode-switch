@@ -130,6 +130,8 @@ pub fn aggregate_sse(raw: &str, model: &str) -> Value {
     let mut stop_reason: Option<String> = None;
     let mut usage_in: i64 = 0;
     let mut usage_out: i64 = 0;
+    let mut usage_cr: i64 = 0;
+    let mut usage_cw: i64 = 0;
     let mut id = String::new();
 
     for line in raw.lines() {
@@ -150,6 +152,14 @@ pub fn aggregate_sse(raw: &str, model: &str) -> Value {
                     .to_string();
                 usage_in = ev
                     .pointer("/message/usage/input_tokens")
+                    .and_then(|x| x.as_i64())
+                    .unwrap_or(0);
+                usage_cr = ev
+                    .pointer("/message/usage/cache_read_input_tokens")
+                    .and_then(|x| x.as_i64())
+                    .unwrap_or(0);
+                usage_cw = ev
+                    .pointer("/message/usage/cache_creation_input_tokens")
                     .and_then(|x| x.as_i64())
                     .unwrap_or(0);
             }
@@ -193,11 +203,34 @@ pub fn aggregate_sse(raw: &str, model: &str) -> Value {
         },
         "stop_reason": stop_reason.unwrap_or_else(|| "end_turn".into()),
         "stop_sequence": Value::Null,
-        "usage": { "input_tokens": usage_in, "output_tokens": usage_out },
+        "usage": {
+            "input_tokens": usage_in, "output_tokens": usage_out,
+            "cache_read_input_tokens": usage_cr,
+            "cache_creation_input_tokens": usage_cw,
+        },
     })
 }
 
 /// anthropic 原生形态聚合（/v1/responses 的 text/usage 提取复用此结构）
 pub fn aggregate_sse_to_anthropic(raw: &str, model: &str) -> Value {
     aggregate_sse(raw, model)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aggregate_passes_cache_usage_through() {
+        let sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"usage\":{\"input_tokens\":9,\"cache_read_input_tokens\":7,\"cache_creation_input_tokens\":3}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"好\"}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n",
+        );
+        let out = aggregate_sse(sse, "GLM-5.3-Flash");
+        assert_eq!(out["usage"]["input_tokens"], 9);
+        assert_eq!(out["usage"]["output_tokens"], 2);
+        assert_eq!(out["usage"]["cache_read_input_tokens"], 7);
+        assert_eq!(out["usage"]["cache_creation_input_tokens"], 3);
+    }
 }
