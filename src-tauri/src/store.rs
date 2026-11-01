@@ -27,7 +27,11 @@ fn no_window(prog: &str) -> std::process::Command {
 #[cfg(windows)]
 fn detached(mut c: std::process::Command) -> std::process::Command {
     use std::os::windows::process::CommandExt;
+    use std::process::Stdio;
     c.creation_flags(0x0000_0008 | 0x0000_0200);
+    // DETACHED_PROCESS 只断控制台，不掐 std 句柄——ZCode.exe 进程树（含 zusage
+    // 注入层）的 stdout 会顺着继承句柄打进启动终端，这里照 Unix 分支同样掐掉
+    c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
     c
 }
 #[cfg(not(windows))]
