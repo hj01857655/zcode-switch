@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { toast, openPwModal, dismissSplash } from "../components/ui-react.jsx";
+import { toast, openPwModal, dismissSplash } from "../components/ui-bus.js";
 import { Ic } from "../components/iconsx.jsx";
-import { init, t, lang, stripErr } from "../lib/i18n.js";
+import { init, t, lang, stripErr, beginLangSync, endLangSync, syncLang, patchLang } from "../lib/i18n.js";
+import { currentTheme, setTheme } from "../lib/theme.js";
 
 function Toggle({ on, label, desc, onClick }) {
   return (
@@ -39,17 +40,62 @@ function LangSeg({ cur, onPick }) {
   );
 }
 
-export default function SettingsPage({ embedded = false, initialState = null }) {
+function ThemeSeg({ cur, onPick }) {
+  return (
+    <div className="tog-row">
+      <div className="tog-info"><div className="tog-label">{t("s.themeLabel")}</div></div>
+      <div className="lang-seg" role="radiogroup" aria-label={t("s.themeLabel")}>
+        <button className={"lang-opt" + (cur === "dark" ? " on" : "")} role="radio" aria-checked={cur === "dark"} onClick={() => onPick("dark")}>{t("s.themeDark")}</button>
+        <button className={"lang-opt" + (cur === "light" ? " on" : "")} role="radio" aria-checked={cur === "light"} onClick={() => onPick("light")}>{t("s.themeLight")}</button>
+      </div>
+    </div>
+  );
+}
+
+export default function SettingsPage({ embedded = false, initialState = null, visible = true }) {
   // 主窗口已拉过同一份 get_state，直接作初始值，避免打开时白等一轮文件 IO
   const [state, setState] = useState(initialState);
   const [autostart, setAutostart] = useState(false);
   const [loadErr, setLoadErr] = useState("");
   const [pathInput, setPathInput] = useState("");
+  const [theme, setThemeState] = useState(currentTheme);
+  // 侧边栏快捷钮与这里共用 zcs-theme 事件，任一处切换都同步
+  useEffect(() => {
+    const f = () => setThemeState(currentTheme());
+    window.addEventListener("zcs-theme", f);
+    return () => window.removeEventListener("zcs-theme", f);
+  }, []);
+  const pickTheme = setTheme;
   const [proxyInput, setProxyInput] = useState("");
+  const pathElRef = useRef(null);
+  const proxyElRef = useRef(null);
   const busy = useRef(false);
+  // 开关读最新值用 ref 镜像；optRef 是乐观覆盖层——点击同步写入，
+  // render 未提交时点击也能读到正确期望态，IPC 成功后清键
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  // autostart 是独立 useState，不在 state 里；readOpt 的兑底读不到它，这里单独镜像
+  const autostartRef = useRef(autostart);
+  autostartRef.current = autostart;
+  const optRef = useRef({});
+  const readOpt = (k) => (k in optRef.current ? optRef.current[k] : stateRef.current[k]);
+  // 开关写盘走串行队列：每次点击都生效（UI 先翻、IPC 排队），不吞点击
+  const toggleQueue = useRef(Promise.resolve());
+  const pendingToggles = useRef(0);
+  const dirtyWhilePending = useRef(false);
+  // 主窗口保活本页（不卸载）；隐藏期间跳过 state-changed 的 refresh，重新可见时补拉一次
+  const visibleRef = useRef(visible);
+  const skippedHidden = useRef(false);
+  useEffect(() => {
+    visibleRef.current = visible;
+    if (visible && skippedHidden.current) {
+      skippedHidden.current = false;
+      refresh().catch(() => {});
+    }
+  }, [visible]);
 
   const guard = async (fn) => {
-    if (busy.current) return;
+    if (busy.current) { toast(t("common.busy")); return; }
     busy.current = true;
     try {
       await fn();
@@ -57,20 +103,52 @@ export default function SettingsPage({ embedded = false, initialState = null }) 
       toast(stripErr(e), "err");
     } finally {
       busy.current = false;
+      flushDirty();
+    }
+  };
+
+  // 开关等写盘期间，state-changed 的 refresh 会用盘上旧值把乐观 UI 打回去；
+  // 先记账，队列排空后再拉一次真值
+  const flushDirty = () => {
+    if (dirtyWhilePending.current && !busy.current && pendingToggles.current === 0) {
+      dirtyWhilePending.current = false;
+      refresh().catch(() => {});
     }
   };
 
   const refresh = async () => {
-    const s = await invoke("get_state");
+    const [raw, auto] = await Promise.all([
+      invoke("get_state"),
+      invoke("autostart_status").catch((e) => { console.warn("autostart_status", e); return false; }),
+    ]);
+    const s = patchLang(raw);
+    optRef.current = {}; // 盘上真值已覆盖一切乐观值
     setState(s);
-    setPathInput(s.zcode_path || "");
-    setProxyInput(s.auth_proxy_url || "");
-    setAutostart(await invoke("autostart_status").catch(() => false));
-    if (s?.language) init(s.language);
+    // 输入框聚焦时不覆盖：state-changed 可能在用户打字途中到来（切换/领取等后台动作）
+    if (document.activeElement !== pathElRef.current) setPathInput(s.zcode_path || "");
+    if (document.activeElement !== proxyElRef.current) setProxyInput(s.auth_proxy_url || "");
+    setAutostart(auto);
+    if (s?.language) syncLang(s.language);
+  };
+
+  // 点击即翻 UI，IPC 串行入队；失败 toast 后拉盘上真值纠正 UI
+  const enqueueToggle = (invoker) => {
+    pendingToggles.current++;
+    toggleQueue.current = toggleQueue.current
+      .then(invoker)
+      .catch((e) => { toast(stripErr(e), "err"); return refresh().catch(() => {}); })
+      .finally(() => {
+        pendingToggles.current--;
+        flushDirty();
+      });
   };
 
   useEffect(() => {
-    const un = listen("state-changed", () => refresh().catch(() => {}));
+    const un = listen("state-changed", () => {
+      if (busy.current || pendingToggles.current > 0) { dirtyWhilePending.current = true; return; }
+      if (!visibleRef.current) { skippedHidden.current = true; return; }
+      refresh().catch(() => {});
+    });
     (async () => {
       try {
         await refresh();
@@ -83,15 +161,19 @@ export default function SettingsPage({ embedded = false, initialState = null }) 
     return () => { un.then((f) => f()); };
   }, []);
 
+  useEffect(() => {
+    // 只在语言变化时需要同步标题；无依赖数组会让输入框每键重跑一次
+    document.title = `Z·SWITCH ${t("s.title")}`;
+  }, [lang()]);
+
   if (loadErr) {
-    return <div className="loading" style={{ color: "var(--red)" }}>{t("common.loadFail", { e: loadErr })}</div>;
+    return <div className="loading" style={{ color: "var(--red)" }}>{t("common.loadFail", { e: stripErr(loadErr) })}</div>;
   }
   if (!state) {
-    return <div className="loading">LOADING</div>;
+    return <div className="loading">{t("common.loading")}</div>;
   }
 
   const s = state;
-  document.title = `Z·SWITCH ${t("s.title")}`;
 
   const finishImport = async (report) => {
     if (report.added.length === 0 && report.skipped.length === 0) {
@@ -107,28 +189,49 @@ export default function SettingsPage({ embedded = false, initialState = null }) 
   };
 
   const actions = {
-    setLang: (l) => guard(async () => {
+    setLang: (l) => {
       if (l === lang()) return;
-      await invoke("set_language", { lang: l });
-      await refresh();
-      setState((v) => ({ ...v }));
-    }),
+      // 先翻 UI 再异步落盘：不进 guard 队列，set_language 抢 store_guard 的等待不挡界面
+      setState((v) => ({ ...v, language: l }));
+      beginLangSync(l);
+      init(l);
+      invoke("set_language", { lang: l })
+        .finally(endLangSync)
+        .catch(async () => {
+          // 落盘失败：拉盘上真值纠正 UI（走 syncLang/patchLang，尊重在途闸）
+          const s = patchLang(await invoke("get_state"));
+          optRef.current = {};
+          setState(s);
+          if (s?.language) syncLang(s.language);
+        });
+    },
 
-    toggleAutostart: () => guard(async () => {
-      const v = await invoke("autostart_set", { enable: !autostart });
-      setAutostart(v);
-      toast(v ? t("s.autostartOnToast") : t("s.autostartOffToast"));
-    }),
-
-    toggleBehavior: (key) => guard(async () => {
-      await invoke("set_behavior", {
-        launchAfterSwitch: key === "launch" ? !s.launch_after_switch : null,
-        closeToTray: key === "tray" ? !s.close_to_tray : null,
-        hotSwitch: key === "hot" ? !s.hot_switch : null,
+    toggleAutostart: () => {
+      const next = !("autostart" in optRef.current ? optRef.current.autostart : autostartRef.current);
+      optRef.current.autostart = next;
+      setAutostart(next);
+      enqueueToggle(async () => {
+        const v = await invoke("autostart_set", { enable: next });
+        setAutostart(v);
+        delete optRef.current.autostart;
+        toast(v ? t("s.autostartOnToast") : t("s.autostartOffToast"));
       });
-      await refresh();
-      toast(t("s.savedToast"));
-    }),
+    },
+
+    toggleBehavior: (key) => {
+      const k = key === "launch" ? "launch_after_switch" : key === "tray" ? "close_to_tray" : "hot_switch";
+      const next = !readOpt(k);
+      optRef.current[k] = next;
+      setState((v) => ({ ...v, [k]: next }));
+      enqueueToggle(async () => {
+        await invoke("set_behavior", {
+          launchAfterSwitch: key === "launch" ? next : null,
+          closeToTray: key === "tray" ? next : null,
+          hotSwitch: key === "hot" ? next : null,
+        });
+        delete optRef.current[k];
+      });
+    },
 
     exportAll: () => guard(async () => {
       const p = await invoke("export_all_pick_path");
@@ -164,18 +267,26 @@ export default function SettingsPage({ embedded = false, initialState = null }) 
       await refresh();
     }),
 
-    toggleAuthProxy: () => guard(async () => {
-      const url = proxyInput.trim() || s.auth_proxy_url || null;
-      await invoke("set_auth_proxy", { on: !s.auth_proxy_on, url });
-      await refresh();
-      toast(s.auth_proxy_on ? t("s.proxyOffToast") : t("s.proxyOnToast"), "ok", t("s.proxyOnDetail"));
-    }),
+    toggleAuthProxy: () => {
+      const next = !readOpt("auth_proxy_on");
+      optRef.current.auth_proxy_on = next;
+      setState((v) => ({ ...v, auth_proxy_on: next }));
+      enqueueToggle(async () => {
+        await invoke("set_auth_proxy", {
+          on: next,
+          url: proxyInput.trim() || stateRef.current.auth_proxy_url || null,
+        });
+        delete optRef.current.auth_proxy_on;
+        toast(next ? t("s.proxyOnToast") : t("s.proxyOffToast"), "ok", t("s.proxyOnDetail"));
+      });
+    },
 
     saveProxy: () => guard(async () => {
-      await invoke("set_auth_proxy", { on: s.auth_proxy_on, url: proxyInput.trim() });
+      // 读 stateRef 而非闭包里的 s：开关可能还在队列里写盘，闭包值是旧一拍
+      const on = stateRef.current.auth_proxy_on;
+      await invoke("set_auth_proxy", { on, url: proxyInput.trim() });
       await refresh();
-      toast(t("s.proxySaved"), "ok",
-        s.auth_proxy_on ? t("s.proxySavedOn") : t("s.proxySavedOff"));
+      toast(t("s.proxySaved"), "ok", on ? t("s.proxySavedOn") : t("s.proxySavedOff"));
     }),
 
   };
@@ -189,7 +300,8 @@ export default function SettingsPage({ embedded = false, initialState = null }) 
       )}
       <section className="settings open">
         <LangSeg cur={s.language || "zh"} onPick={actions.setLang} />
-        <label>BEHAVIOR · {t("s.behaviorLabel")}</label>
+        <ThemeSeg cur={theme} onPick={pickTheme} />
+        <label>{t("s.behaviorLabel")}</label>
         <Toggle on={autostart} label={t("s.autostart")} desc={t("s.autostartDesc")} onClick={actions.toggleAutostart} />
         <Toggle on={s.launch_after_switch} label={t("s.launchAfter")} desc={t("s.launchAfterDesc")} onClick={() => actions.toggleBehavior("launch")} />
         <Toggle on={s.close_to_tray} label={t("s.closeTray")} desc={t("s.closeTrayDesc")} onClick={() => actions.toggleBehavior("tray")} />
@@ -197,7 +309,7 @@ export default function SettingsPage({ embedded = false, initialState = null }) 
         <label style={{ marginTop: 14 }}>{t("s.authLabel")}</label>
         <Toggle on={s.auth_proxy_on} label={t("s.proxyToggle")} desc={t("s.proxyToggleDesc")} onClick={actions.toggleAuthProxy} />
         <div className="path-line" style={{ marginTop: 6 }}>
-          <input className="zcode-path auth-proxy" type="text" value={proxyInput}
+          <input ref={proxyElRef} className="zcode-path auth-proxy" type="text" value={proxyInput}
             placeholder={t("s.proxyPh")}
             onChange={(e) => setProxyInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") actions.saveProxy(); }} />
@@ -210,7 +322,7 @@ export default function SettingsPage({ embedded = false, initialState = null }) 
         </div>
         <label style={{ marginTop: 14 }}>{t("s.pathLabel")}</label>
         <div className="path-line">
-          <input className="zcode-path" type="text" value={pathInput} placeholder="C:\\Program Files\\ZCode\\ZCode.exe"
+          <input ref={pathElRef} className="zcode-path" type="text" value={pathInput} placeholder="C:\\Program Files\\ZCode\\ZCode.exe"
             onChange={(e) => setPathInput(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") actions.savePath(); }} />
           <button className="btn-ghost" onClick={actions.browsePath}>{t("s.browse")}</button>

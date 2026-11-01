@@ -6,6 +6,13 @@ import App from "./App.jsx";
 // 右键菜单与快捷键屏蔽逻辑在 ui-react.jsx 副作用里
 import "./components/ui-react.jsx";
 
+// 主题早挂：渲染前应用持久化主题，避免首帧闪错色
+import { currentTheme, applyNativeTheme } from "./lib/theme.js";
+if (!document.documentElement.dataset.theme) {
+  document.documentElement.dataset.theme = localStorage.getItem("zcs-theme") || "dark";
+}
+applyNativeTheme(currentTheme());
+
 const root = createRoot(document.getElementById("app"));
 root.render(
   <StrictMode>

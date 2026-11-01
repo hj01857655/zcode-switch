@@ -2,8 +2,8 @@
 // React 渲染层经 useSyncExternalStore 订阅版本号；emit() 取代原 render()
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { toast, openPwModal, openConfirmModal, openProviderModal } from "../components/ui-react.jsx";
-import { init, t, lang, localeTag, stripErr } from "./i18n.js";
+import { toast, openPwModal, openConfirmModal, openProviderModal } from "../components/ui-bus.js";
+import { init, t, lang, localeTag, stripErr, syncLang, patchLang } from "./i18n.js";
 
 // ---- 订阅机制 ----
 let version = 0;
@@ -21,6 +21,7 @@ export const store = {
   appVer: "",
   acctQuota: {},        // id -> {data?, err?, busy}
   claimable: {},        // id -> {plans?, err?, busy}
+  referral: {},         // id -> {summary?, invitees?, err?, busy}
 };
 
 let busy = false;
@@ -82,8 +83,8 @@ export function uiLocked() {
 
 // ---- 数据加载 ----
 async function refresh() {
-  store.state = await invoke("get_state");
-  if (store.state?.language) init(store.state.language);
+  store.state = patchLang(await invoke("get_state"));
+  if (store.state?.language) syncLang(store.state.language);
 }
 
 async function guard(fn) {
@@ -122,6 +123,51 @@ async function loadClaimPreview(id) {
   } catch (e) {
     store.claimable[id] = { plans: cur.plans || [], err: String(e), busy: false };
   }
+}
+
+// ---- referral 邀请 ----
+let referralWaiter = null;
+let referralBindRunning = false;
+
+// 验证码窗口是 claim/bind 共用的单一资源：后端在任一侧发起时清掉对方 pending，
+// 前端一侧进行时另一侧直接拒绝，避免被清方的 waiter 干等 90s 超时
+const claimSideBusy = () => !!(claimWaiter || claimActive || claimAllRunning || refreshClaim.running || autoClaimRunning);
+const referralSideBusy = () => !!(referralWaiter || referralBindRunning);
+
+export async function loadReferral(id) {
+  const cur = store.referral[id] || {};
+  if (cur.busy) return;
+  store.referral[id] = { ...cur, busy: true, err: null };
+  emit();
+  try {
+    const [summary, invitees] = await Promise.all([
+      invoke("referral_summary", { id }),
+      invoke("referral_invitees", { id }).catch(() => null),
+    ]);
+    store.referral[id] = { summary: summary?.data || summary, invitees: invitees?.data || null, err: null, busy: false };
+  } catch (e) {
+    store.referral[id] = { ...cur, busy: false, err: stripErr(e) };
+  }
+  emit();
+}
+
+// 邀请页全量加载：与 sweep 同款小并发分批，错峰打满不挤爆
+export async function loadAllReferrals(ids) {
+  const BATCH = 4;
+  const GAP_MS = 800;
+  for (let i = 0; i < ids.length; i += BATCH) {
+    await Promise.all(ids.slice(i, i + BATCH).map((id) => loadReferral(id)));
+    if (i + BATCH < ids.length) await new Promise((res) => setTimeout(res, GAP_MS));
+  }
+}
+
+function waitForReferralResult(accountId, timeoutMs = 90000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; referralWaiter = null; clearTimeout(t); resolve(v); } };
+    const t = setTimeout(() => finish(null), timeoutMs);
+    referralWaiter = { accountId, finish };
+  });
 }
 
 let claimWaiter = null;
@@ -244,6 +290,10 @@ async function autoClaimTick() {
         progressed = false;
         const plan = store.claimable[id]?.plans?.[0];
         if (!plan) break;
+        if (referralSideBusy()) { // bind 占用验证码窗口：本轮跳过，冷却后重试
+          autoClaimCooldown[id] = Date.now() + AUTO_CLAIM_INTERVAL_MS;
+          break;
+        }
         try {
           await invoke("claim_start", { id, planId: plan.plan_id, auto: true });
         } catch (e) {
@@ -462,6 +512,7 @@ export const actions = {
 
   async claim(id) {
     if (claimActive || claimAllRunning || refreshClaim.running) { toast(t("m.claimBusy"), "warn"); return; }
+    if (referralSideBusy()) { toast(t("m.captchaBusy"), "warn"); return; }
     const plans = store.claimable[id]?.plans || [];
     const plan = plans[0];
     if (!plan) { toast(t("m.noClaimable"), "warn"); return; }
@@ -486,13 +537,15 @@ export const actions = {
       .filter((id) => (store.claimable[id]?.plans || []).length > 0);
     if (!ids.length) { toast(t("m.noClaimableAccounts"), "warn"); return; }
     if (claimActive || claimAllRunning || refreshClaim.running) return;
+    if (referralSideBusy()) { toast(t("m.captchaBusy"), "warn"); return; }
     claimAllRunning = true;
     claimActive = true;
     emit();
     try {
       for (let i = 0; i < ids.length; i++) {
         const id = ids[i];
-        const plan = store.claimable[id].plans[0];
+        const plan = store.claimable[id]?.plans?.[0];
+        if (!plan) continue; // 刷新可能在排队期间清空了该账号的 plans
         const name = store.state.accounts.find((a) => a.id === id)?.name || id;
         try {
           await invoke("claim_start", { id, planId: plan.plan_id });
@@ -570,6 +623,34 @@ export const actions = {
     toast(t("m.refreshClaimDone", { n: ids.length, k: okCount }), "ok");
   },
 
+  async referralBind(id, code) {
+    if (referralBindRunning) { toast(t("m.referralBusy"), "warn"); return; }
+    if (claimSideBusy()) { toast(t("m.captchaBusy"), "warn"); return; }
+    const c = (code || "").trim().toUpperCase();
+    if (!c) { toast(t("m.referralCodeNeeded"), "warn"); return; }
+    referralBindRunning = true;
+    const name = accountName(id);
+    try {
+      await invoke("referral_bind_start", { id, inviteCode: c });
+      toast(t("m.referralVerify", { name, code: c }), "ok", t("m.referralVerifyDetail"));
+      const r = await waitForReferralResult(id);
+      if (!r) {
+        await invoke("referral_bind_cancel").catch(() => {});
+        toast(t("m.referralTimeout"), "warn");
+      } else if (r.ok === false) {
+        if (r.code === "closed") toast(t("m.referralCancelled"), "warn");
+        else toast(t("m.referralFailed", { name, msg: r.message || t("m.unknownErr") }), "err");
+      } else {
+        toast(t("m.referralOk", { name, code: c }), "ok");
+      }
+      loadReferral(id);
+    } catch (e) {
+      toast(stripErr(e), "err");
+    } finally {
+      referralBindRunning = false;
+    }
+  },
+
   async toggleAutoClaim() {
     if (autoToggleBusy) return;
     const next = !store.state.auto_claim;
@@ -632,7 +713,23 @@ export function wireEvents() {
     }
   });
 
+  listen("referral://result", (ev) => {
+    const p = ev.payload || {};
+    if (referralWaiter && referralWaiter.accountId === p.accountId) referralWaiter.finish(p);
+  });
+
+  // 用户手动关掉验证码窗口：后端已清 pending，这里让两侧 waiter 立即结束
+  listen("captcha://closed", () => {
+    if (claimWaiter) claimWaiter.finish({ ok: false, code: "closed" });
+    if (referralWaiter) referralWaiter.finish({ ok: false, code: "closed" });
+  });
+
   listen("captcha://interactive", () => {
+    if (referralWaiter && !claimWaiter && !autoClaimRunning) {
+      // 无感验证失败≠绑码失败：窗口留着，手动过滑块后 submit 仍会派发到 bind 分支
+      toast(t("m.referralInteractive"), "warn", t("m.referralInteractiveDetail"));
+      return;
+    }
     if (!autoClaimRunning || !claimWaiter) return;
     const id = claimWaiter.accountId;
     invoke("claim_cancel").catch(() => {});
@@ -679,7 +776,7 @@ export async function boot() {
     enrollAccounts();
     sweepTick();
     setInterval(() => {
-      invoke("get_state").then((s) => { store.state = s; if (s?.language) init(s.language); enrollAccounts(); emit(); }).catch(() => {});
+      invoke("get_state").then((raw) => { const s = patchLang(raw); store.state = s; if (s?.language) syncLang(s.language); enrollAccounts(); emit(); }).catch(() => {});
     }, 5000);
     setInterval(sweepTick, TICK_MS);
     setTimeout(autoClaimTick, AUTO_CLAIM_FIRST_DELAY_MS);
@@ -692,5 +789,5 @@ export async function boot() {
   }
 }
 
-import { dismissSplash } from "../components/ui-react.jsx";
+import { dismissSplash } from "../components/ui-bus.js";
 function dismissSplashSafe() { dismissSplash(); }

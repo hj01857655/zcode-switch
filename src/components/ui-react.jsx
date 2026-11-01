@@ -16,31 +16,7 @@ document.addEventListener("keydown", (e) => {
   if (e.ctrlKey && ["u", "s"].includes(e.key.toLowerCase())) e.preventDefault();
 });
 
-export function dismissSplash() {
-  const el = document.getElementById("splash");
-  if (!el) return;
-  el.style.opacity = "0";
-  setTimeout(() => el.remove(), 220);
-}
-
-// ---- 事件总线 ----
-const ui = { toasts: [], confirm: null, pw: null, provider: null };
-let version = 0;
-let toastSeq = 0;
-const listeners = new Set();
-const subscribe = (fn) => { listeners.add(fn); return () => listeners.delete(fn); };
-const getVersion = () => version;
-function emit() { version++; listeners.forEach((fn) => fn()); }
-
-export function toast(msg, kind = "ok", detail = "") {
-  const id = ++toastSeq;
-  ui.toasts = [...ui.toasts, { id, msg: String(msg), kind, detail: detail ? String(detail) : "" }];
-  emit();
-  setTimeout(() => {
-    ui.toasts = ui.toasts.filter((x) => x.id !== id);
-    emit();
-  }, detail ? 5200 : 3200);
-}
+import { ui, emit, subscribe, getVersion, toast } from "./ui-bus.js";
 
 function useUi() {
   useSyncExternalStore(subscribe, getVersion, getVersion);
@@ -66,7 +42,7 @@ function ConfirmModal() {
   const m = u.confirm;
   const yesRef = useRef(null);
   const noRef = useRef(null);
-  const close = () => { ui.confirm = null; emit(); };
+  const close = () => { ui.confirm = ui.confirmQ?.shift() || null; emit(); };
 
   useEffect(() => {
     if (!m) return;
@@ -130,6 +106,10 @@ function PwModal() {
     if (!m) return;
     setPw1(""); setPw2(""); setErr(""); setBusy(false);
     input1Ref.current?.focus();
+    // Esc 全局兜底：焦点不在输入框（Tab 到按钮/面板）时也能关闭
+    const onEsc = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("keydown", onEsc);
+    return () => document.removeEventListener("keydown", onEsc);
   }, [m]);
 
   if (!m) return null;
@@ -253,10 +233,6 @@ function ProviderFocus() {
   }, [u.provider]);
   return null;
 }
-
-export function openConfirmModal(m) { ui.confirm = m; emit(); }
-export function openPwModal(m) { ui.pw = m; emit(); }
-export function openProviderModal(m) { ui.provider = m; emit(); }
 
 const host = document.createElement("div");
 document.body.appendChild(host);

@@ -1,9 +1,11 @@
 // App.jsx — 渲染层根组件。class 名与 DOM 层级保持与原 innerHTML 模板一致，CSS 无需改动。
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Ic } from "./components/iconsx.jsx";
-import { t } from "./lib/i18n.js";
+import { init, t, beginLangSync, endLangSync } from "./lib/i18n.js";
+import { currentTheme, setTheme } from "./lib/theme.js";
 import {
-  store, subscribe, getVersion, boot, actions, runtimeFlags,
+  store, subscribe, getVersion, boot, actions, runtimeFlags, emit,
   notchColor, autoPillTitle, accountName,  // eslint-disable-line no-unused-vars
 } from "./lib/store.js";
 import { expireInfo, tierBadges } from "./lib/quotaView.js";
@@ -11,6 +13,9 @@ import { AccountQuotaSlot, TierBadges } from "./components/QuotaView.jsx";
 import SettingsPage from "./views/settings.jsx";
 import AboutPage from "./views/about.jsx";
 import GatewayPage from "./views/gateway.jsx";
+import GatewayLogsPage from "./views/gateway-logs.jsx";
+import ReferralPage from "./views/referral.jsx";
+import DashboardPage from "./views/dashboard.jsx";
 
 function useStore() {
   useSyncExternalStore(subscribe, getVersion, getVersion);
@@ -18,8 +23,33 @@ function useStore() {
 }
 
 function SideNav({ view, setView, s, unsaved }) {
+  const [theme, setThemeState] = useState(currentTheme);
+  // setTheme 只广播事件不回调，这里监听同步本地图标状态
+  useEffect(() => {
+    const f = () => setThemeState(currentTheme());
+    window.addEventListener("zcs-theme", f);
+    return () => window.removeEventListener("zcs-theme", f);
+  }, []);
+  const toggleTheme = () => setTheme(theme === "dark" ? "light" : "dark");
+  const toggleLang = () => {
+    const next = (s.language || "zh").startsWith("zh") ? "en" : "zh";
+    // 先翻 UI 再异步落盘：set_language 要抢 store_guard，赶上切换/保存就得等，不该挡住界面
+    store.state.language = next;
+    beginLangSync(next);
+    init(next);
+    emit();
+    invoke("set_language", { lang: next })
+      .finally(endLangSync)
+      .catch(() => {
+        // 状态栏静默：落盘失败回滚 UI
+        store.state.language = s.language || "zh";
+        init(store.state.language);
+        emit();
+      });
+  };
+  // 状态只以点呈现（运行=绿 / 已登录=灰白 / 未登录=暗），文字进悬停提示
   const dotCls = s.zcode_running ? "run" : s.live_logged_in ? "" : "off";
-  const statusText = s.zcode_running
+  const statusTip = s.zcode_running
     ? t("m.status.running")
     : s.live_logged_in
       ? unsaved ? t("m.status.unsaved") : t("m.status.safe")
@@ -27,8 +57,14 @@ function SideNav({ view, setView, s, unsaved }) {
   return (
     <aside className="sidenav">
       <div className="side-logo">
-        Z·SWITCH{store.appVer ? <span className="ver">v{store.appVer}</span> : null}
+        Z·SWITCH{store.appVer ? <span className="ver" title={`v${store.appVer}`}>v{store.appVer.split(".").slice(0, 3).join(".")}</span> : null}
       </div>
+      <button
+        className={"side-item" + (view === "dashboard" ? " on" : "")}
+        onClick={() => setView("dashboard")}
+      >
+        <Ic name="gauge" size={16} /> {t("d.menu")}
+      </button>
       <button
         className={"side-item" + (view === "accounts" ? " on" : "")}
         onClick={() => setView("accounts")}
@@ -40,6 +76,18 @@ function SideNav({ view, setView, s, unsaved }) {
         onClick={() => setView("gateway")}
       >
         <Ic name="swap" size={16} /> {t("x.menuLabel")}
+      </button>
+      <button
+        className={"side-item" + (view === "gatewayLogs" ? " on" : "")}
+        onClick={() => setView("gatewayLogs")}
+      >
+        <Ic name="list" size={16} /> {t("xl.menuLabel")}
+      </button>
+      <button
+        className={"side-item" + (view === "referral" ? " on" : "")}
+        onClick={() => setView("referral")}
+      >
+        <Ic name="link" size={16} /> {t("r.menu")}
       </button>
       <button
         className={"side-item" + (view === "settings" ? " on" : "")}
@@ -55,8 +103,15 @@ function SideNav({ view, setView, s, unsaved }) {
       </button>
       <div className="side-spacer" />
       <div className="side-foot">
-        <span className={"status-dot " + dotCls} />
-        <span className="status-text">{statusText}</span>
+        <span className={"status-dot " + dotCls} title={statusTip} />
+        <span className="side-quick">
+          <button className="side-qbtn" title={t("m.quickTheme")} aria-label={t("m.quickTheme")} onClick={toggleTheme}>
+            <Ic name={theme === "dark" ? "sun" : "moon"} size={14} />
+          </button>
+          <button className="side-qbtn" title={t("m.quickLang")} aria-label={t("m.quickLang")} onClick={toggleLang}>
+            {(s.language || "zh").startsWith("zh") ? "EN" : "中"}
+          </button>
+        </span>
       </div>
     </aside>
   );
@@ -226,8 +281,14 @@ function AccountRow({ a, quota, plan, claimDisabled }) {
           <button className="icon-btn danger" title={t("btn.delete")} aria-label={t("btn.delete")} onClick={() => actions.delete(a.id)}>
             <Ic name="x" size={16} />
           </button>
-          <button className="btn-switch has-ic" onClick={() => actions.askSwitch(a.id)} disabled={isActive}>
-            {isActive ? t("btn.current") : <><Ic name="swap" size={14} /> {t("btn.switch")}</>}
+          <button
+            className={"icon-btn" + (isActive ? " on" : "")}
+            title={isActive ? t("btn.current") : t("btn.switch")}
+            aria-label={isActive ? t("btn.current") : t("btn.switch")}
+            onClick={() => actions.askSwitch(a.id)}
+            disabled={isActive}
+          >
+            <Ic name={isActive ? "check" : "swap"} size={16} />
           </button>
         </div>
       </div>
@@ -304,9 +365,14 @@ export default function App() {
             </main>
           </>
         ) : null}
+        {view === "dashboard" ? (
+          <div className="settings-view">
+            <DashboardPage />
+          </div>
+        ) : null}
         {settingsLoaded ? (
           <div className={"settings-view" + (view === "settings" ? "" : " hidden")}>
-            <SettingsPage embedded initialState={st} />
+            <SettingsPage embedded initialState={st} visible={view === "settings"} />
           </div>
         ) : null}
         {view === "about" ? (
@@ -316,7 +382,17 @@ export default function App() {
         ) : null}
         {view === "gateway" ? (
           <div className="settings-view">
-            <GatewayPage />
+            <GatewayPage onOpenLogs={() => setView("gatewayLogs")} />
+          </div>
+        ) : null}
+        {view === "gatewayLogs" ? (
+          <div className="settings-view">
+            <GatewayLogsPage />
+          </div>
+        ) : null}
+        {view === "referral" ? (
+          <div className="settings-view">
+            <ReferralPage />
           </div>
         ) : null}
       </div>

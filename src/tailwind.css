@@ -1,0 +1,27 @@
+/* Tailwind v4 接入层：全部 Tailwind 专属语法集中在此文件，
+   主样式表 styles.css 只通过一行普通 @import 引入，
+   避免编辑器 CSS 服务对 @theme 等专属 at-rule 报诊断。
+   不引 preflight（避免与既有全局样式冲突）；
+   @theme inline 复用 :root 调色板，新页面可直接写
+   bg-panel / text-inkmute / border-line / text-mint / font-mono 等工具类。 */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg2: var(--bg-2);
+  --color-panel: var(--panel);
+  --color-panel2: var(--panel-2);
+  --color-line: var(--hairline);
+  --color-linesoft: var(--hairline-soft);
+  --color-ink: var(--ink);
+  --color-inkdim: var(--ink-dim);
+  --color-inkmute: var(--ink-mute);
+  --color-amber: var(--amber);
+  --color-amberdeep: var(--amber-deep);
+  --color-mint: var(--mint);
+  --color-mintdim: var(--mint-dim);
+  --color-red: var(--red);
+  --font-mono: var(--mono);
+  --font-body: var(--body);
+}
