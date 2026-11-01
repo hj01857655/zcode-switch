@@ -6,6 +6,7 @@ mod flowlog;
 mod oauth;
 mod probe;
 mod quota;
+mod referral;
 mod store;
 pub mod gateway;
 mod zcrypto;
@@ -34,6 +35,24 @@ struct PendingClaim {
 }
 
 static PENDING_CLAIM: Mutex<Option<PendingClaim>> = Mutex::new(None);
+
+struct PendingBind {
+    account_id: String,
+    account_name: String,
+    invite_code: String,
+    credentials: Value,
+    config: Option<Value>,
+    device_mid: String,
+}
+
+static PENDING_BIND: Mutex<Option<PendingBind>> = Mutex::new(None);
+
+fn pending_bind_guard() -> std::sync::MutexGuard<'static, Option<PendingBind>> {
+    match PENDING_BIND.lock() {
+        Ok(g) => g,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
 
 fn pending_guard() -> std::sync::MutexGuard<'static, Option<PendingClaim>> {
     match PENDING_CLAIM.lock() {
@@ -264,10 +283,15 @@ async fn get_account_quota(id: String) -> Result<quota::QuotaOverview, String> {
 
 #[tauri::command]
 async fn claim_preview(id: String) -> Result<Vec<claim::ClaimPlan>, String> {
-    let paths = Paths::detect();
-    let mid = store::ensure_virtual_device_mid(&paths, &id)?;
-    let acc = load_account(&paths, &id)?;
-    claim::preview_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))
+    // 阻塞 ureq 丢入 blocking 线程池，不占 async runtime worker
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = Paths::detect();
+        let mid = store::ensure_virtual_device_mid(&paths, &id)?;
+        let acc = load_account(&paths, &id)?;
+        claim::preview_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[derive(serde::Serialize)]
@@ -280,19 +304,24 @@ struct ClaimRefreshResult {
 
 #[tauri::command]
 async fn claim_refresh(id: String) -> Result<ClaimRefreshResult, String> {
-    let paths = Paths::detect();
-    let mid = store::ensure_virtual_device_mid(&paths, &id)?;
-    let acc = load_account(&paths, &id)?;
-    let (activated, activation_error) =
-        match claim::telemetry_user_id(&paths.home, &acc.credentials) {
-            Some(uid) => match claim::report_activation_events(&uid, &mid) {
-                Ok(()) => (true, None),
-                Err(e) => (false, Some(e)),
-            },
-            None => (false, None),
-        };
-    let plans = claim::preview_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))?;
-    Ok(ClaimRefreshResult { plans, activated, activation_error })
+    // 阻塞 ureq 丢入 blocking 线程池，不占 async runtime worker
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = Paths::detect();
+        let mid = store::ensure_virtual_device_mid(&paths, &id)?;
+        let acc = load_account(&paths, &id)?;
+        let (activated, activation_error) =
+            match claim::telemetry_user_id(&paths.home, &acc.credentials) {
+                Some(uid) => match claim::report_activation_events(&uid, &mid) {
+                    Ok(()) => (true, None),
+                    Err(e) => (false, Some(e)),
+                },
+                None => (false, None),
+            };
+        let plans = claim::preview_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))?;
+        Ok(ClaimRefreshResult { plans, activated, activation_error })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -312,6 +341,8 @@ async fn claim_start(
         .ok_or_else(|| i18n::tr("err.claim.gone"))?;
     let display = if plan.name.is_empty() { plan.plan_id.clone() } else { plan.name.clone() };
 
+    // 验证码窗口与提交入口与 referral bind 共用，发起时清掉对方 pending，防跨流程串扰
+    *pending_bind_guard() = None;
     *pending_guard() = Some(PendingClaim {
         account_id: acc.id.clone(),
         account_name: acc.name.clone(),
@@ -336,17 +367,32 @@ async fn claim_captcha_submit(
     param: String,
     region: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // 验证码子窗口只有一个提交入口；按当前待定态分发到 claim 或 referral bind
+    let bind = pending_bind_guard().take();
+    if let Some(pending) = bind {
+        return submit_pending_bind(app, pending, param, region).await;
+    }
     let pending = pending_guard().take().ok_or_else(|| i18n::tr("err.claim.none_pending"))?;
-    let paths = Paths::detect();
-    let res = claim::submit_claim(
-        &paths.home,
-        &pending.credentials,
-        pending.config.as_ref(),
-        &pending.plan_id,
-        &param,
-        region.as_deref(),
-        Some(pending.device_mid),
+    // 阻塞提交（最长 25s）丢 blocking 线程池；pending 被 move，字段提前 clone 供结果组装
+    let (aid, aname, pname) = (
+        pending.account_id.clone(),
+        pending.account_name.clone(),
+        pending.plan_name.clone(),
     );
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let paths = Paths::detect();
+        claim::submit_claim(
+            &paths.home,
+            &pending.credentials,
+            pending.config.as_ref(),
+            &pending.plan_id,
+            &param,
+            region.as_deref(),
+            Some(pending.device_mid),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?;
     close_captcha_window(&app);
     let payload = match res {
         Ok(v) => {
@@ -360,9 +406,9 @@ async fn claim_captcha_submit(
                 .and_then(|x| x.as_i64())
                 .map(|s| s * 1000);
             let outcome = claim::ClaimOutcome {
-                account_id: pending.account_id.clone(),
-                account_name: pending.account_name.clone(),
-                plan_name: pending.plan_name.clone(),
+                account_id: aid,
+                account_name: aname,
+                plan_name: pname,
                 starts_at: ms("starts_at"),
                 ends_at: ms("ends_at"),
                 server_time,
@@ -372,12 +418,7 @@ async fn claim_captcha_submit(
             p
         }
         Err(e) => {
-            let p = claim::failure_payload(
-                &pending.account_id,
-                &pending.account_name,
-                &pending.plan_name,
-                &e,
-            );
+            let p = claim::failure_payload(&aid, &aname, &pname, &e);
             let _ = app.emit("claim://result", &p);
             return Ok(p);
         }
@@ -388,13 +429,121 @@ async fn claim_captcha_submit(
 #[tauri::command]
 async fn claim_cancel(app: AppHandle) -> Result<(), String> {
     *pending_guard() = None;
+    *pending_bind_guard() = None;
+    close_captcha_window(&app);
+    Ok(())
+}
+
+async fn submit_pending_bind(
+    app: AppHandle,
+    pending: PendingBind,
+    param: String,
+    region: Option<String>,
+) -> Result<serde_json::Value, String> {
+    // 阻塞提交丢 blocking 线程池；pending 被 move，字段提前 clone 供结果组装
+    let (aid, aname, code) = (
+        pending.account_id.clone(),
+        pending.account_name.clone(),
+        pending.invite_code.clone(),
+    );
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        let paths = Paths::detect();
+        referral::submit_bind(
+            &paths.home,
+            &pending.credentials,
+            pending.config.as_ref(),
+            &pending.invite_code,
+            &param,
+            region.as_deref(),
+            Some(pending.device_mid),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    close_captcha_window(&app);
+    let payload = match res {
+        Ok(_) => json!({
+            "ok": true,
+            "accountId": aid,
+            "accountName": aname,
+            "inviteCode": code,
+        }),
+        Err(e) => json!({
+            "ok": false,
+            "accountId": aid,
+            "accountName": aname,
+            "inviteCode": code,
+            "message": e,
+        }),
+    };
+    let _ = app.emit("referral://result", &payload);
+    Ok(payload)
+}
+
+#[tauri::command]
+async fn referral_summary(id: String) -> Result<Value, String> {
+    // 阻塞 ureq 丢入 blocking 线程池，不占 async runtime worker
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = Paths::detect();
+        let mid = store::ensure_virtual_device_mid(&paths, &id)?;
+        let acc = load_account(&paths, &id)?;
+        referral::summary(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn referral_invitees(id: String) -> Result<Value, String> {
+    // 阻塞 ureq 丢入 blocking 线程池，不占 async runtime worker
+    tauri::async_runtime::spawn_blocking(move || {
+        let paths = Paths::detect();
+        let mid = store::ensure_virtual_device_mid(&paths, &id)?;
+        let acc = load_account(&paths, &id)?;
+        referral::invitees(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn referral_bind_start(
+    app: AppHandle,
+    id: String,
+    invite_code: String,
+) -> Result<serde_json::Value, String> {
+    let code = invite_code.trim().to_uppercase();
+    if code.is_empty() {
+        return Err(i18n::tr("err.referral.no_code").into());
+    }
+    let paths = Paths::detect();
+    let mid = store::ensure_virtual_device_mid(&paths, &id)?;
+    let acc = load_account(&paths, &id)?;
+    // 验证码窗口与提交入口与 claim 共用，发起时清掉对方 pending，防跨流程串扰
+    *pending_guard() = None;
+    *pending_bind_guard() = Some(PendingBind {
+        account_id: acc.id.clone(),
+        account_name: acc.name.clone(),
+        invite_code: code.clone(),
+        credentials: acc.credentials,
+        config: acc.config,
+        device_mid: mid,
+    });
+    open_captcha_window(&app, false)?;
+    Ok(json!({ "account": acc.name, "inviteCode": code }))
+}
+
+#[tauri::command]
+async fn referral_bind_cancel(app: AppHandle) -> Result<(), String> {
+    *pending_bind_guard() = None;
     close_captcha_window(&app);
     Ok(())
 }
 
 fn close_captcha_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("captcha") {
-        let _ = w.close();
+        // destroy 不触发 CloseRequested：程序化关窗（提交成功/取消）不能被误判成用户关窗
+        let _ = w.destroy();
     }
 }
 
@@ -934,7 +1083,8 @@ async fn set_language(app: AppHandle, lang: String) -> Result<(), String> {
             let _ = w.set_title(&i18n::tr(key));
         }
     }
-    let _ = app.emit("state-changed", ());
+    // 不广播 state-changed：语言是前端本地可知的单一字段，
+    // 广播只会让设置页白跑一轮 get_state 全量账号扫描
     Ok(())
 }
 
@@ -1169,6 +1319,10 @@ pub fn run() {
             claim_captcha_config,
             claim_captcha_submit,
             claim_cancel,
+            referral_summary,
+            referral_invitees,
+            referral_bind_start,
+            referral_bind_cancel,
             oauth_providers,
             oauth_begin,
             set_auth_proxy,
@@ -1191,6 +1345,7 @@ pub fn run() {
             gateway_start,
             gateway_stop,
             gateway_status,
+            gateway_log_history,
         ]))
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -1203,6 +1358,9 @@ pub fn run() {
                 }
                 if window.label() == "captcha" {
                     *pending_guard() = None;
+                    *pending_bind_guard() = None;
+                    // 用户手动关窗：让前端的 claim/bind waiter 立即结束，不等 90s 超时
+                    let _ = window.app_handle().emit("captcha://closed", ());
                 }
             }
         })
@@ -1231,6 +1389,18 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // 网关自启恢复：上次退出时服务在跑就自动拉起（dev 重编重启同理）。
+            // 端口被占时后台线程绑定失败只打日志，running 标志照旧置位——既有瑕疵，不在此扩修
+            {
+                let gw = app.state::<gateway::GatewayState>();
+                let want = gw.config.lock().map(|c| c.auto_start).unwrap_or(false);
+                if want {
+                    if let Err(e) = gw.start() {
+                        eprintln!("[gateway] 自启恢复失败: {e}");
+                    }
+                }
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -1244,6 +1414,14 @@ async fn gateway_start(
     app: tauri::AppHandle,
     port: Option<u16>,
     api_key: Option<String>,
+    upstream_connect_secs: Option<u64>,
+    max_retries: Option<u32>,
+    global_backoff_secs: Option<u64>,
+    sticky: Option<bool>,
+    cors_origins: Option<Vec<String>>,
+    body_limit_mb: Option<u64>,
+    log_to_disk: Option<bool>,
+    log_file_max_mb: Option<u64>,
 ) -> Result<serde_json::Value, String> {
     let state = app.state::<gateway::GatewayState>();
     // 配置更新：只在提供字段时改写（表单保存语义）
@@ -1251,6 +1429,14 @@ async fn gateway_start(
         let mut cfg = state.config.lock().map_err(|e| e.to_string())?;
         if let Some(p) = port { cfg.port = p; }
         if let Some(k) = api_key { if !k.trim().is_empty() { cfg.api_key = k.trim().to_string(); } }
+        if let Some(v) = upstream_connect_secs { if v > 0 { cfg.upstream_connect_secs = v; } }
+        if let Some(v) = max_retries { cfg.max_retries = v; }
+        if let Some(v) = global_backoff_secs { cfg.global_backoff_secs = v; }
+        if let Some(v) = sticky { cfg.sticky = v; }
+        if let Some(v) = cors_origins { cfg.cors_origins = v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(); }
+        if let Some(v) = body_limit_mb { if v > 0 && v <= 512 { cfg.body_limit_mb = v; } }
+        if let Some(v) = log_to_disk { cfg.log_to_disk = v; }
+        if let Some(v) = log_file_max_mb { if v > 0 && v <= 1024 { cfg.log_file_max_mb = v; } }
         // 落盘：不保存的话新端口/密钥重启即丢，UI 上的「保存」就成了骗局
         if let Err(e) = cfg.save() {
             eprintln!("[gateway] 配置落盘失败: {e}");
@@ -1271,9 +1457,9 @@ async fn gateway_stop(app: tauri::AppHandle) -> Result<serde_json::Value, String
 async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let state = app.state::<gateway::GatewayState>();
     let cfg = state.config.lock().map_err(|e| e.to_string())?.clone();
-    // farm 快照：成员清单现取（账号库投影），池侧只回冷却/在飞/计数
-    let members = gateway::pool::farm_members().unwrap_or_default();
-    let snapshot = state.shared.farm.snapshot(&members);
+    // pool 快照：成员清单现取（账号库投影），池侧只回冷却/在飞/计数
+    let members = gateway::pool::members().unwrap_or_default();
+    let snapshot = state.shared.pool.snapshot(&members);
     Ok(json!({
         "running": state.is_running(),
         "port": cfg.port,
@@ -1283,8 +1469,56 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
             format!("{}…{}", &cfg.api_key[..6], &cfg.api_key[cfg.api_key.len()-4..])
         } else { "***".to_string() },
         "hasApiKey": !cfg.api_key.is_empty(),
+        // 自启恢复标志（启动时是否自动拉起服务）
+        "autoStart": cfg.auto_start,
         // M5 扩展：池快照 + 请求日志环
-        "farm": snapshot,
+        "pool": snapshot,
         "logs": state.shared.logs(),
+        // 模型表与 /v1/models 同源（gateway::MODEL_LIST）
+        "models": gateway::MODEL_LIST,
+        // 配置面回显（调优输入框的初值）
+        "upstreamConnectSecs": cfg.upstream_connect_secs,
+        "maxRetries": cfg.max_retries,
+        "sticky": cfg.sticky,
+        "globalBackoffSecs": cfg.global_backoff_secs,
+        "corsOrigins": cfg.cors_origins,
+        "bodyLimitMb": cfg.body_limit_mb,
+        "logToDisk": cfg.log_to_disk,
+        "logFileMaxMb": cfg.log_file_max_mb,
     }))
+}
+
+/// 日志历史：读 gateway.jsonl 尾部（独立日志页用，全量而非内存环 200 条）
+#[tauri::command]
+async fn gateway_log_history() -> Result<Vec<serde_json::Value>, String> {
+    tokio::task::spawn_blocking(|| {
+        use std::io::{BufRead, Seek, SeekFrom};
+        let p = crate::Paths::detect().store_dir().join("gateway.jsonl");
+        // 从未发过请求时文件不存在：返回空列表而非报错
+        let f = match std::fs::File::open(&p) {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e.to_string()),
+        };
+        let mut rd = std::io::BufReader::new(f);
+        // 尾部读取：先定位文件尾，再从后往前收集最多 2000 行
+        let len = rd.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
+        let start = len.saturating_sub(512 * 1024);
+        rd.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+        let mut lines = Vec::new();
+        let mut buf = String::new();
+        // 起点在行中间时先丢弃半行
+        if start > 0 {
+            let _ = rd.read_line(&mut buf);
+            buf.clear();
+        }
+        loop {
+            buf.clear();
+            let n = rd.read_line(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 { break; }
+            lines.push(buf.clone());
+            if lines.len() > 4000 { lines.drain(0..lines.len() - 4000); }
+        }
+        Ok(lines.into_iter().filter_map(|l| serde_json::from_str(&l).ok()).collect::<Vec<_>>())
+    }).await.map_err(|e| e.to_string())?
 }

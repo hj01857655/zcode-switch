@@ -1,6 +1,7 @@
 
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
+import { applyNativeTheme, currentTheme } from "./lib/theme.js";
 import { init, t, lang, stripErr } from "./lib/i18n.js";
 
 const SDK_URL = "https://o.alicdn.com/captcha-frontend/aliyunCaptcha/AliyunCaptcha.js";
@@ -46,6 +47,9 @@ async function run() {
     const st = await invoke("get_state");
     if (st?.language) init(st.language);
   } catch { }
+  // 与主窗口同源，localStorage 共享：跟随主题，避免浅色主界面弹出深色验证码窗
+  document.documentElement.dataset.theme = localStorage.getItem("zcs-theme") || "dark";
+  applyNativeTheme(currentTheme());
   document.title = t("c.title");
   $btn.textContent = t("c.btn");
   document.querySelector(".cap-foot").textContent = t("c.foot");
@@ -85,7 +89,7 @@ async function run() {
     clearTimeout(tracelessTimer);
     status(t("c.passed"));
     invoke("claim_captcha_submit", { param, region }).catch((e) => {
-      status(t("c.claimReqFail"), "err");
+      status(t("c.submitFail"), "err");
       detail(stripErr(e));
     });
   };

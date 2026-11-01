@@ -356,7 +356,7 @@ fn touch_plans(token: &str, mid: Option<String>) -> Vec<ClaimPlan> {
     out
 }
 
-fn http_err(prefix: &str, e: ureq::Error) -> String {
+pub(crate) fn http_err(prefix: &str, e: ureq::Error) -> String {
     if let ureq::Error::Status(code, resp) = e {
         let body = resp.into_string().unwrap_or_default();
         let msg = serde_json::from_str::<Value>(&body)
