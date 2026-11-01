@@ -161,8 +161,7 @@ pub fn farm_members() -> Result<Vec<FarmMember>, String> {
         if crate::store::account_jwt_expired(&a.credentials, &paths.home) {
             continue;
         }
-        // per-account 虚拟 mid：与切号解耦，每个农场号有稳定独立设备身份。
-        // mid 闸只限 claim/touch/billing 链（2026-11-01），messages 不校验
+        // per-account 虚拟 mid：与切号解耦，每个农场号有稳定独立设备身份
         let mid = crate::store::ensure_virtual_device_mid(&paths, &a.id).ok();
         let token = match crate::claim::claim_token(&a.credentials, a.config.as_ref(), &secret) {
             Ok(t) => t,

@@ -1123,8 +1123,8 @@ pub fn live_quota(paths: &Paths) -> Result<quota::QuotaOverview, String> {
 
 pub fn account_quota(paths: &Paths, id: &str) -> Result<quota::QuotaOverview, String> {
     let acc = load_account(paths, id)?;
-    // mid 闸（plan-50 §2.6）：billing 的 X-Device-Mid 只认 live telemetry mid，virtual mid 兜底
-    let mid = quota::device_mid().or_else(|| ensure_virtual_device_mid(paths, id).ok());
+    // 身份块跟 claim 链对齐：查谁的额度就带谁的 virtual mid，不带 live 全局 mid
+    let mid = ensure_virtual_device_mid(paths, id).ok();
     quota::quota_for_snapshot(&paths.home, &acc.credentials, acc.config.as_ref(), mid.as_deref())
 }
 
