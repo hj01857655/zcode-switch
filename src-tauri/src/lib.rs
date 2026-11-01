@@ -1418,6 +1418,9 @@ async fn gateway_start(
     max_retries: Option<u32>,
     global_backoff_secs: Option<u64>,
     sticky: Option<bool>,
+    allowed_fails: Option<u32>,
+    keepalive_secs: Option<u64>,
+    total_timeout_secs: Option<u64>,
     cors_origins: Option<Vec<String>>,
     body_limit_mb: Option<u64>,
     log_to_disk: Option<bool>,
@@ -1433,6 +1436,9 @@ async fn gateway_start(
         if let Some(v) = max_retries { cfg.max_retries = v; }
         if let Some(v) = global_backoff_secs { cfg.global_backoff_secs = v; }
         if let Some(v) = sticky { cfg.sticky = v; }
+        if let Some(v) = allowed_fails { cfg.allowed_fails = v; }
+        if let Some(v) = keepalive_secs { cfg.keepalive_secs = v.min(300); }
+        if let Some(v) = total_timeout_secs { cfg.total_timeout_secs = v.min(3600); }
         if let Some(v) = cors_origins { cfg.cors_origins = v.into_iter().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(); }
         if let Some(v) = body_limit_mb { if v > 0 && v <= 512 { cfg.body_limit_mb = v; } }
         if let Some(v) = log_to_disk { cfg.log_to_disk = v; }
@@ -1481,6 +1487,9 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
         "maxRetries": cfg.max_retries,
         "sticky": cfg.sticky,
         "globalBackoffSecs": cfg.global_backoff_secs,
+        "allowedFails": cfg.allowed_fails,
+        "keepaliveSecs": cfg.keepalive_secs,
+        "totalTimeoutSecs": cfg.total_timeout_secs,
         "corsOrigins": cfg.cors_origins,
         "bodyLimitMb": cfg.body_limit_mb,
         "logToDisk": cfg.log_to_disk,

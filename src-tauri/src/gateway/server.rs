@@ -17,6 +17,8 @@ struct SvcState {
     max_retries: u32,
     /// 全局风控退避秒数（配置面）
     backoff_secs: u64,
+    /// SSE keepalive 秒数（配置面；0 = 关闭）
+    keepalive_secs: u64,
     /// 跨线程共享：pool 调度器 + 请求日志环 + 计数（twoapi_status 经 TwoApiState 读取）
     shared: std::sync::Arc<super::GatewayShared>,
 }
@@ -35,12 +37,16 @@ pub async fn serve(
     let max_retries = cfg.max_retries;
     let backoff_secs = cfg.global_backoff_secs;
     let cors_origins = cfg.cors_origins.clone();
+    let keepalive_secs = cfg.keepalive_secs;
+    let total_timeout_secs = cfg.total_timeout_secs;
     shared.pool.set_sticky(cfg.sticky);
+    shared.pool.set_allowed_fails(cfg.allowed_fails);
     let state = std::sync::Arc::new(SvcState {
         api_key: cfg.api_key,
         http,
         max_retries,
         backoff_secs,
+        keepalive_secs,
         shared,
     });
     let app = axum::Router::new()
@@ -51,6 +57,10 @@ pub async fn serve(
         .route("/v1/responses", post(responses_endpoint))
         .layer(axum::extract::DefaultBodyLimit::max(
             (cfg.body_limit_mb * 1024 * 1024).max(1) as usize,
+        ))
+        .layer(axum::middleware::from_fn_with_state(
+            std::time::Duration::from_secs(total_timeout_secs),
+            timeout_mw,
         ))
         .layer(axum::middleware::from_fn_with_state(cors_origins, cors_mw))
         .with_state(state);
@@ -117,6 +127,12 @@ async fn messages(
     }
     // 请求关联 ID：换号重试产生的多条日志共用；错误响应体回传供客户端对账
     let req_id = uuid::Uuid::new_v4().simple().to_string();
+    // 调用方标识：截断入日志（ZCode / Claude Code / curl 等 UA 各异），区分请求来源
+    let ua: String = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.chars().take(120).collect())
+        .unwrap_or_default();
     let body_json: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => return Err((StatusCode::BAD_REQUEST, api_error("invalid_request_error", &e.to_string()))),
@@ -146,7 +162,7 @@ async fn messages(
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let out = translate::aggregate_sse(&raw, &model);
-        push_ok_log(&state.shared, "/v1/messages", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, stream, &req_id, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
+        push_ok_log(&state.shared, "/v1/messages", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, stream, &req_id, &ua, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
         return Ok(Json(out).into_response());
     }
     // 流式：上游 SSE 原样透传（Anthropic 原生客户端，事件形态一致，零转换）
@@ -156,21 +172,48 @@ async fn messages(
         UpstreamReply::Stream(r) => r,
     };
     let shared = std::sync::Arc::clone(&state.shared);
+    let keepalive = state.keepalive_secs;
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(16);
     tokio::spawn(async move {
         let mut resp = resp;
         let mut acc = String::new(); // 下游透传原文累积（截断入日志）
-        while let Ok(Some(c)) = resp.chunk().await {
-            if acc.chars().count() < LOG_RESP_CAP {
-                acc.push_str(&String::from_utf8_lossy(&c));
-            }
-            if tx.send(Ok(c)).await.is_err() {
-                break;
+        // SSE keepalive：上游静默超阈值时发 ": ping" 注释帧（SSE 规范里注释会被客户端忽略），
+        // 防止中间层把看似空闲的连接掐掉——模型长思考场景真实存在
+        let mut idle = tokio::time::interval(std::time::Duration::from_secs(keepalive.max(1)));
+        idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        idle.tick().await; // 首个 tick 立即返回，跳过
+        let alive = keepalive > 0;
+        loop {
+            let chunk = if alive {
+                tokio::select! {
+                    c = resp.chunk() => c,
+                    _ = idle.tick() => {
+                        // 静默期：发注释帧保活（不算响应内容，不进 acc）
+                        if tx.send(Ok(bytes::Bytes::from_static(b": ping\n\n"))).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                resp.chunk().await
+            };
+            match chunk {
+                Ok(Some(c)) => {
+                    if acc.chars().count() < LOG_RESP_CAP {
+                        acc.push_str(&String::from_utf8_lossy(&c));
+                    }
+                    if tx.send(Ok(c)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(_) => break,
             }
         }
         push_ok_log(
             &shared,
-            "/v1/messages", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, stream, &req_id, &req_preview, Some(clip(&acc, LOG_RESP_CAP)),
+            "/v1/messages", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, stream, &req_id, &ua, &req_preview, Some(clip(&acc, LOG_RESP_CAP)),
         );
     });
     let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
@@ -191,6 +234,12 @@ async fn chat_completions(
     }
     // 请求关联 ID：换号重试产生的多条日志共用；错误响应体回传供客户端对账
     let req_id = uuid::Uuid::new_v4().simple().to_string();
+    // 调用方标识：截断入日志（ZCode / Claude Code / curl 等 UA 各异），区分请求来源
+    let ua: String = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.chars().take(120).collect())
+        .unwrap_or_default();
     let req: Value = serde_json::from_slice(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, api_error("invalid_request_error", &e.to_string())))?;
     let model = req
@@ -216,7 +265,7 @@ async fn chat_completions(
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let out = openai::aggregate_sse_to_openai(&raw, &model);
-        push_ok_log(&state.shared, "/v1/chat/completions", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, stream, &req_id, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
+        push_ok_log(&state.shared, "/v1/chat/completions", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, stream, &req_id, &ua, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
         return Ok(Json(out).into_response());
     }
 
@@ -226,13 +275,32 @@ async fn chat_completions(
         UpstreamReply::Stream(r) => r,
     };
     let shared = std::sync::Arc::clone(&state.shared);
+    let keepalive = state.keepalive_secs;
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(16);
     tokio::spawn(async move {
         let mut conv = openai::OpenAiStream::new(&model);
         let mut resp = resp;
         let mut acc = String::new(); // 下游 chunk 帧累积（截断入日志）
+        // SSE keepalive：与 /v1/messages 同款（OpenAI 流注释帧同样被客户端忽略）
+        let mut idle = tokio::time::interval(std::time::Duration::from_secs(keepalive.max(1)));
+        idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        idle.tick().await;
+        let alive = keepalive > 0;
         loop {
-            match resp.chunk().await {
+            let chunk = if alive {
+                tokio::select! {
+                    c = resp.chunk() => c,
+                    _ = idle.tick() => {
+                        if tx.send(Ok(bytes::Bytes::from_static(b": ping\n\n"))).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                resp.chunk().await
+            };
+            match chunk {
                 Ok(Some(c)) => {
                     let out = conv.feed(&String::from_utf8_lossy(&c));
                     if acc.chars().count() < LOG_RESP_CAP {
@@ -254,7 +322,7 @@ async fn chat_completions(
             acc.push_str(&fin);
         }
         let _ = tx.send(Ok(bytes::Bytes::from(fin))).await;
-        push_ok_log(&shared, "/v1/chat/completions", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, stream, &req_id, &req_preview, Some(clip(&acc, LOG_RESP_CAP)));
+        push_ok_log(&shared, "/v1/chat/completions", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, stream, &req_id, &ua, &req_preview, Some(clip(&acc, LOG_RESP_CAP)));
     });
     let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
     resp.headers_mut()
@@ -265,6 +333,31 @@ async fn chat_completions(
 enum UpstreamReply {
     /// 上游统一走 stream=true，非流式路径由调用侧 bytes().await 聚合
     Stream(reqwest::Response),
+}
+
+/// 手写整体请求超时中间件（不引 tower-http）：兜底防请求永久挂死（如上游 TCP 半开）。
+/// 0 = 关闭。流式回答正常持续数分钟，默认 600s 只拦真正的挂死，不会掐断长回答。
+/// 超时后连接被断开，客户端侧表现为连接重置——比永久悬挂可诊断得多
+async fn timeout_mw(
+    State(limit): State<std::time::Duration>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    if limit.is_zero() {
+        return next.run(req).await;
+    }
+    match tokio::time::timeout(limit, next.run(req)).await {
+        Ok(resp) => resp,
+        Err(_) => {
+            let mut resp = Response::new(axum::body::Body::from(
+                "{\"error\":{\"type\":\"timeout_error\",\"message\":\"gateway total timeout exceeded\"}}",
+            ));
+            *resp.status_mut() = StatusCode::GATEWAY_TIMEOUT;
+            resp.headers_mut()
+                .insert(header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            resp
+        }
+    }
 }
 
 /// 手写 CORS 中间件（不引 tower-http）：精确匹配 state.cors_origins；含 "*" 放行全部。
@@ -398,6 +491,31 @@ fn extract_usage(resp: Option<&String>) -> (i64, i64, i64, i64) {
     (tin, tout, tcr, tcw)
 }
 
+/// 从响应载体提取停止原因：非流式聚合 JSON（anthropic stop_reason / openai finish_reason）；
+/// 流式 SSE 的 message_delta 帧。空串 = 未能取得（截断/错误响应）
+fn extract_finish(resp: Option<&String>) -> String {
+    let Some(raw) = resp else { return String::new() };
+    // 载体一：整段聚合 JSON
+    if let Ok(v) = serde_json::from_str::<Value>(raw.trim()) {
+        if let Some(s) = v.get("stop_reason").and_then(|x| x.as_str()) {
+            return s.to_string();
+        }
+        if let Some(s) = v.pointer("/choices/0/finish_reason").and_then(|x| x.as_str()) {
+            return s.to_string();
+        }
+        return String::new();
+    }
+    // 载体二：SSE 逐行
+    for line in raw.lines() {
+        let Some(d) = line.strip_prefix("data: ") else { continue };
+        let Ok(v) = serde_json::from_str::<Value>(d.trim()) else { continue };
+        if let Some(s) = v.pointer("/delta/stop_reason").and_then(|x| x.as_str()) {
+            return s.to_string();
+        }
+    }
+    String::new()
+}
+
 fn push_ok_log(
     shared: &super::GatewayShared,
     ep: &str,
@@ -408,10 +526,12 @@ fn push_ok_log(
     model: &str,
     stream: bool,
     req_id: &str,
+    ua: &str,
     req: &str,
     resp: Option<String>,
 ) {
     let (tin, tout, tcr, tcw) = extract_usage(resp.as_ref());
+    let finish = extract_finish(resp.as_ref());
     shared.push_log(json!({
         "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         "ep": ep, "account": account, "status": 200, "ok": true,
@@ -419,13 +539,12 @@ fn push_ok_log(
         "ms": ms, "ttft": ttft_ms, "attempt": attempt,
         "req_id": req_id,
         "tin": tin, "tout": tout, "tcr": tcr, "tcw": tcw,
+        "finish": if finish.is_empty() { serde_json::Value::Null } else { serde_json::json!(finish) },
+        "ua": if ua.is_empty() { serde_json::Value::Null } else { serde_json::json!(ua) },
         "req": req,
         "resp": resp,
     }));
 }
-/// pool 分发：选号 → 发上游 → 按错误档收尾。
-/// 粘性优先（成功游标不动）；429/3008-3010/网络错误换号重放（重试次数可配）；
-/// 3012/405 全局退避（时长可配）；全员不可用 503。members/claim_token 都是阻塞面（文件 IO + 解密），丢 blocking 池。
 /// 会话标识提取（LiteLLM session affinity 同思路）：专用头优先，其次 body.metadata。
 fn session_of(headers: &HeaderMap, body: &Value) -> Option<String> {
     for h in ["x-session-id", "x-claude-code-session-id", "x-litellm-session-id"] {
@@ -442,11 +561,8 @@ fn session_of(headers: &HeaderMap, body: &Value) -> Option<String> {
 
 
 /// pool 分发：选号 → 发上游 → 按错误档收尾。
-/// 粘性优先（成功游标不动）；429/3008-3010/网络错误换号重放（重试次数可配）；
+/// 粘性优先（成功游标不动）；429/3008-3010/5xx/网络错误换号重放（重试次数可配）；
 /// 3012/405 全局退避（时长可配）；全员不可用 503。members/claim_token 都是阻塞面（文件 IO + 解密），丢 blocking 池。
-/// 会话标识提取（LiteLLM session affinity 同思路）：专用头优先，其次 body.metadata。
-
-
 async fn pool_send(
     state: &SvcState,
     prepared: &[u8],
@@ -550,6 +666,12 @@ async fn responses_endpoint(
     }
     // 请求关联 ID：换号重试产生的多条日志共用；错误响应体回传供客户端对账
     let req_id = uuid::Uuid::new_v4().simple().to_string();
+    // 调用方标识：截断入日志（ZCode / Claude Code / curl 等 UA 各异），区分请求来源
+    let ua: String = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.chars().take(120).collect())
+        .unwrap_or_default();
     let req: Value = serde_json::from_slice(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, api_error("invalid_request_error", &e.to_string())))?;
     let model = super::translate::map_model(get_str_req(&req, "model"));
@@ -571,7 +693,7 @@ async fn responses_endpoint(
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let out = super::responses::aggregate_sse_to_responses(&raw, &model);
-        push_ok_log(&state.shared, "/v1/responses", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, false, &req_id, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
+        push_ok_log(&state.shared, "/v1/responses", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, false, &req_id, &ua, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
         return Ok(Json(out).into_response());
     }
     let ok = pool_send(&state, &prepared, "/v1/responses", &model, true, &req_preview, &req_id, sticky).await?;
@@ -580,6 +702,7 @@ async fn responses_endpoint(
         UpstreamReply::Stream(r) => r,
     };
     let shared = std::sync::Arc::clone(&state.shared);
+    let keepalive = state.keepalive_secs;
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(16);
     tokio::spawn(async move {
         let mut stream = super::responses::ResponsesStream::new(&model);
@@ -589,8 +712,26 @@ async fn responses_endpoint(
         if tx.send(Ok(bytes::Bytes::from(pre))).await.is_err() {
             return; // 客户端断开
         }
+        // SSE keepalive：与前两个端点同款
+        let mut idle = tokio::time::interval(std::time::Duration::from_secs(keepalive.max(1)));
+        idle.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        idle.tick().await;
+        let alive = keepalive > 0;
         loop {
-            match resp.chunk().await {
+            let chunk = if alive {
+                tokio::select! {
+                    c = resp.chunk() => c,
+                    _ = idle.tick() => {
+                        if tx.send(Ok(bytes::Bytes::from_static(b": ping\n\n"))).await.is_err() {
+                            break;
+                        }
+                        continue;
+                    }
+                }
+            } else {
+                resp.chunk().await
+            };
+            match chunk {
                 Ok(Some(c)) => {
                     let out = stream.feed(&String::from_utf8_lossy(&c));
                     if acc.chars().count() < LOG_RESP_CAP {
@@ -612,7 +753,7 @@ async fn responses_endpoint(
             acc.push_str(&fin);
         }
         let _ = tx.send(Ok(bytes::Bytes::from(fin))).await;
-        push_ok_log(&shared, "/v1/responses", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, true, &req_id, &req_preview, Some(clip(&acc, LOG_RESP_CAP)));
+        push_ok_log(&shared, "/v1/responses", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, true, &req_id, &ua, &req_preview, Some(clip(&acc, LOG_RESP_CAP)));
     });
     let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
     resp.headers_mut()

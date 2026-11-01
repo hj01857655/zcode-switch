@@ -19,6 +19,17 @@ pub struct GatewayConfig {
     /// 3012 等全局风控后的整体退避（秒）
     #[serde(default = "d_backoff")]
     pub global_backoff_secs: u64,
+    /// 连续失败熔断：同一账号在本进程内连续失败 N 次即强制冷却（0 = 关闭）。
+    /// 持续坏掉的号没有这项时会一直被打，本项兜底下线
+    #[serde(default = "d_allowed_fails")]
+    pub allowed_fails: u32,
+    /// SSE keepalive（秒）：上游静默超过该时长时向客户端发 ": ping" 注释帧，防中间层掐空闲连接（0 = 关闭）
+    #[serde(default = "d_keepalive")]
+    pub keepalive_secs: u64,
+    /// 整体请求超时（秒）：从收到请求到响应结束的兜底上限，防请求永久挂死（0 = 不设）。
+    /// 默认 600s 远大于正常流式回答，只拦真正的挂死
+    #[serde(default = "d_total_timeout")]
+    pub total_timeout_secs: u64,
     /// 跟随应用自启：start/stop 时落盘，应用启动时按此恢复
     #[serde(default)]
     pub auto_start: bool,
@@ -42,6 +53,9 @@ fn d_backoff() -> u64 { 600 }
 fn d_body_limit() -> u64 { 32 }
 fn d_true() -> bool { true }
 fn d_log_max() -> u64 { 16 }
+fn d_allowed_fails() -> u32 { 5 }
+fn d_keepalive() -> u64 { 15 }
+fn d_total_timeout() -> u64 { 600 }
 
 impl Default for GatewayConfig {
     fn default() -> Self {
@@ -53,6 +67,9 @@ impl Default for GatewayConfig {
             max_retries: d_retries(),
             sticky: d_true(),
             global_backoff_secs: d_backoff(),
+            allowed_fails: d_allowed_fails(),
+            keepalive_secs: d_keepalive(),
+            total_timeout_secs: d_total_timeout(),
             auto_start: false,
             cors_origins: Vec::new(),
             body_limit_mb: d_body_limit(),

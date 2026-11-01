@@ -1,7 +1,7 @@
 // GATEWAY 农场调度：账号库投影 + 粘性轮转 + 冷却 + 在飞上限 + 3012 全局退避。
 // 设计见 docs/GATEWAY.md §3。调度状态纯内存（游标/冷却表重启清零），不落第二份盘。
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -15,6 +15,11 @@ pub const GLOBAL_BACKOFF_SECS: u64 = 10 * 60;
 pub const SESSION_TTL_SECS: u64 = 30 * 60;
 /// pin 表上限：防多客户端会话堆积，超限丢最旧一半
 const SESSION_CAP: usize = 512;
+
+/// 成功率熔断（one-api 80%/10 同思路）：最近 TRIP_WINDOW 次收尾里错误率 ≥ 80% 即认定
+/// 该号持续故障，落 TRIP_COOLDOWN_SECS 长冷却（单次短冷却压不住的慢性错误：3007/5xx 连发）
+const TRIP_WINDOW: usize = 10;
+const TRIP_COOLDOWN_SECS: u64 = 10 * 60;
 
 pub struct PoolMember {
     pub id: String,
@@ -43,6 +48,12 @@ struct Inner {
     global_until: Option<Instant>,
     /// session → (member_id, 最近命中)。会话亲和独立于全局粘性开关：带标识即钉
     sessions: HashMap<String, (String, Instant)>,
+    /// 成功率熔断窗口：member_id → 最近 TRIP_WINDOW 次收尾结果（true=成功）
+    hist: HashMap<String, VecDeque<bool>>,
+    /// 连续失败熔断：member_id → 当前连续失败次数（成功清零；达到 allowed_fails 即长冷却）
+    fail_streak: HashMap<String, u32>,
+    /// 连续失败熔断阈值（配置面，serve 启动时写入；0 = 关闭）
+    allowed_fails: u32,
     /// 累计请求计数（成功/失败，settle 落账）
     total_ok: u64,
     total_err: u64,
@@ -59,6 +70,13 @@ impl Pool {
     pub fn set_sticky(&self, v: bool) {
         if let Ok(mut inner) = self.0.lock() {
             inner.sticky = v;
+        }
+    }
+
+    /// 连续失败熔断阈值（配置面）：同一账号连续失败 N 次即强制长冷却；0 = 关闭
+    pub fn set_allowed_fails(&self, v: u32) {
+        if let Ok(mut inner) = self.0.lock() {
+            inner.allowed_fails = v;
         }
     }
 
@@ -140,6 +158,37 @@ impl Pool {
         if let Some(c) = inner.inflight.get_mut(member_id) {
             *c = c.saturating_sub(1);
         }
+        // 成功率熔断：满窗且错误率 ≥ 80% → 长冷却并清窗重新观察（覆盖单次短冷却压不住的慢性故障）
+        let hist = inner.hist.entry(member_id.to_string()).or_default();
+        hist.push_back(ok);
+        if hist.len() > TRIP_WINDOW {
+            hist.pop_front();
+        }
+        let tripped = hist.len() == TRIP_WINDOW
+            && hist.iter().filter(|&&o| !o).count() * 5 >= TRIP_WINDOW * 4;
+        if tripped {
+            hist.clear();
+            inner.cool.insert(
+                member_id.to_string(),
+                Instant::now() + Duration::from_secs(TRIP_COOLDOWN_SECS),
+            );
+        }
+        // 连续失败熔断（互补触发器）：失败连击 +1、成功清零；达到阈值即长冷却并清零计数。
+        // 比成功率窗更快反应「新坏掉的号」——窗口还没满它就先跳。先取阈值快照再操作计数，避开借用冲突
+        let allowed = inner.allowed_fails;
+        let streak = inner.fail_streak.entry(member_id.to_string()).or_insert(0);
+        if ok {
+            *streak = 0;
+        } else {
+            *streak += 1;
+            if allowed > 0 && *streak >= allowed {
+                *streak = 0;
+                inner.cool.insert(
+                    member_id.to_string(),
+                    Instant::now() + Duration::from_secs(TRIP_COOLDOWN_SECS),
+                );
+            }
+        }
         if member_count > 0 && (!ok || !inner.sticky) {
             inner.cursor = (idx + 1) % member_count;
         }
@@ -148,7 +197,8 @@ impl Pool {
                 // 失败解钉：下次该会话重新选号（settle 里重新 pin 的活由 pick 负责）
                 inner.sessions.remove(sid);
             }
-            if cooldown_secs > 0 {
+            // 已熔断则不再落单次短冷却（短档会覆盖刚写的熔断长冷却）
+            if cooldown_secs > 0 && !tripped {
                 inner
                     .cool
                     .insert(member_id.to_string(), Instant::now() + Duration::from_secs(cooldown_secs));
@@ -292,5 +342,29 @@ mod tests {
         let k = pool.pick(&m, Sticky::Session("S2")).unwrap();
         pool.settle(&m[k].id, k, m.len(), true, 0, Sticky::Session("S2"));
         assert_eq!(pool.pick(&m, Sticky::Session("S2")).unwrap(), k);
+    }
+
+    #[test]
+    fn success_rate_breaker_trips_on_chronic_errors() {
+        let m = members2();
+        let pool = Pool::new();
+        // a 先失败一次（游标挪到 b），b 再失败落长冷却退出池，此后 pick 恒选 a
+        let i0 = pool.pick(&m, Sticky::None).unwrap();
+        pool.settle(&m[i0].id, i0, m.len(), false, 0, Sticky::None);
+        let ib = pool.pick(&m, Sticky::None).unwrap();
+        assert_eq!(ib, 1);
+        pool.settle(&m[ib].id, ib, m.len(), false, 3600, Sticky::None);
+        // 慢性失败：单次冷却 0 压不住，连续失败攒窗口；9/10 未满窗不触发（a 窗口已含开头那次）
+        for _ in 0..8 {
+            let i = pool.pick(&m, Sticky::None).unwrap();
+            assert_eq!(i, 0);
+            pool.settle(&m[i].id, i, m.len(), false, 0, Sticky::None);
+            assert_eq!(pool.snapshot(&m)["members"][0]["cooldown_secs"].as_u64().unwrap(), 0);
+        }
+        // 第 10 次失败满窗（100% 错误率）→ 熔断长冷却，pick 无号可用
+        let i = pool.pick(&m, Sticky::None).unwrap();
+        pool.settle(&m[i].id, i, m.len(), false, 0, Sticky::None);
+        assert!(pool.snapshot(&m)["members"][0]["cooldown_secs"].as_u64().unwrap() >= 599);
+        assert!(pool.pick(&m, Sticky::None).is_none());
     }
 }

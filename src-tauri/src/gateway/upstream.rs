@@ -116,7 +116,8 @@ pub async fn messages_stream(
     Ok(resp)
 }
 
-/// 冷却时长（秒）：0 = 不冷却不换号。
+/// 冷却时长（秒）：0 = 不冷却不换号。5xx 短冷 30s：上游瞬断不值得长罚，但不能不罚
+/// （否则故障上游会被重放循环反复选中）。
 pub fn cooldown_secs(status: u16, body: &str) -> u64 {
     match status {
         401 => 30 * 60,            // token 失效
@@ -125,6 +126,7 @@ pub fn cooldown_secs(status: u16, body: &str) -> u64 {
         _ if body.contains("3012") => 10 * 60,
         _ if body.contains("3007") => 60, // 安全验证：body code（HTTP 400），确定性拒绝，不冷却会拿固定 JWT 无限重打
         _ if body.contains("3008") || body.contains("3009") || body.contains("3010") => 60,
+        _ if (500..600).contains(&status) => 30,
         _ => 0,
     }
 }
@@ -134,11 +136,38 @@ pub fn is_global_risk(status: u16, body: &str) -> bool {
     status == 405 || body.contains("3012")
 }
 
-/// 该错误是否值得换号重放一轮（业务性/瞬时错误）
+/// 该错误是否值得换号重放一轮（业务性/瞬时错误）。5xx 视为上游瞬断：换号重放
 pub fn is_retryable(status: u16, body: &str) -> bool {
     status == 0 // 网络错误
         || status == 429
+        || (500..600).contains(&status)
         || body.contains("3008")
         || body.contains("3009")
         || body.contains("3010")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cooldown_and_retry_tiers() {
+        // 分档：token 失效长罚、限流短罚、5xx 瞬断 30s、未知业务错误不罚
+        assert_eq!(cooldown_secs(401, ""), 30 * 60);
+        assert_eq!(cooldown_secs(429, ""), 60);
+        assert_eq!(cooldown_secs(502, "bad gateway"), 30);
+        assert_eq!(cooldown_secs(400, "ordinary error"), 0);
+        // 风控档与全局退避判定
+        assert_eq!(cooldown_secs(400, "code:3012"), 10 * 60);
+        assert!(is_global_risk(405, ""));
+        assert!(is_global_risk(200, "x3012x"));
+        assert!(!is_global_risk(502, ""));
+        // 重放判定：5xx/429/网络/并发档换号，确定性拒绝（3007/401）不重放
+        assert!(is_retryable(0, ""));
+        assert!(is_retryable(429, ""));
+        assert!(is_retryable(500, ""));
+        assert!(is_retryable(400, "code:3008"));
+        assert!(!is_retryable(400, "code:3007"));
+        assert!(!is_retryable(401, ""));
+    }
 }
