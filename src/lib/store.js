@@ -497,8 +497,14 @@ export const actions = {
     let providers;
     try { providers = await invoke("oauth_providers"); }
     catch (e) { toast(stripErr(e), "err"); return; }
+    // 保存登录入口也收进这个弹窗：可用态与禁用原因跟工具栏旧按钮同口径
+    const st = store.state;
+    const activeAcc = st?.accounts?.find((a) => a.is_active) || null;
     openProviderModal({
       providers,
+      canSaveLogin: !!st?.live_logged_in && !activeAcc,
+      saveLoginTitle: activeAcc ? t("m.saveLoginDisabledTitle", { name: activeAcc.name }) : "",
+      onSaveLogin: () => actions.capture(),
       onPick: async (id) => {
         try {
           await invoke("oauth_begin", { provider: id });

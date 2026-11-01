@@ -217,6 +217,17 @@ function ProviderModal() {
             </button>
           ))}
         </div>
+        {m.onSaveLogin ? (
+          <button
+            className="pv-item pv-save"
+            disabled={!m.canSaveLogin}
+            title={m.saveLoginTitle || ""}
+            onClick={() => { if (!m.canSaveLogin) return; close(); m.onSaveLogin?.(); }}
+          >
+            <span className="pv-name">{t("btn.saveLogin")}</span>
+            <span className="pv-arrow">→</span>
+          </button>
+        ) : null}
         <div className="pv-actions">
           <button className="btn-ghost pv-cancel" onClick={close}>{t("common.cancel")}</button>
         </div>

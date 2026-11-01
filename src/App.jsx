@@ -117,20 +117,11 @@ function SideNav({ view, setView, s, unsaved }) {
   );
 }
 
-function Toolbar({ s, active, unsaved, claimableCount }) {
+function Toolbar({ s, active, claimableCount }) {
   const { claimAllRunning, refreshClaim, claimActive, autoClaimRunning } = runtimeFlags();
   const cooling = Date.now() < refreshClaim.cooldownUntil;
   return (
     <section className="toolbar">
-      <button
-        className={"btn-primary has-ic" + (unsaved ? " attention" : "")}
-        onClick={() => actions.capture()}
-        disabled={!s.live_logged_in || !!active}
-        title={active ? t("m.saveLoginDisabledTitle", { name: active.name }) : ""}
-      >
-        <Ic name="capture" size={16} /> {t("btn.saveLogin")}
-      </button>
-
       {claimableCount > 0 ? (
         <button
           className="btn-ghost has-ic claim-all"
@@ -368,7 +359,7 @@ export default function App() {
       <div className="content">
         {view === "accounts" ? (
           <>
-            <Toolbar s={st} active={active} unsaved={unsaved} claimableCount={claimableCount} />
+            <Toolbar s={st} active={active} claimableCount={claimableCount} />
             <div className="section-head">
               <h2>{t("m.accounts")}</h2>
               <span className="count">{t("m.count", { count: st.accounts.length })}</span>
