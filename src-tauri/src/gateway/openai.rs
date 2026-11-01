@@ -1,4 +1,4 @@
-// TWOAPI 翻译层：OpenAI chat/completions ⇄ Anthropic messages（M3）
+// GATEWAY 翻译层：OpenAI chat/completions ⇄ Anthropic messages（M3）
 // 语义逐条对齐 ZCode2api-go translate.go：system=前缀+追加段（无 cache_control）、
 // thinking 走 output_config.effort、上游一律 stream=true、metadata.user_id 内嵌 JSON 串。
 use serde_json::{json, Value};
@@ -390,4 +390,221 @@ pub fn chunk_frame(id: &str, model: &str, delta: Value, finish: Option<&str>) ->
 
 pub fn sse_done() -> &'static str {
     "data: [DONE]\n\n"
+}
+
+/// 上游 anthropic SSE 全量聚合 → OpenAI chat.completion 非流式响应（M3）。
+/// 文本/思考进 completion_frame；tool_calls 仅流式透出（非流式聚合形状不含）。
+pub fn aggregate_sse_to_openai(raw: &str, model: &str) -> Value {
+    let mut text = String::new();
+    let mut reasoning = String::new();
+    let mut finish = "stop".to_string();
+    let mut input = 0i64;
+    let mut output = 0i64;
+    for line in raw.lines() {
+        let data = match line.strip_prefix("data: ") {
+            Some(d) => d.trim(),
+            None => continue,
+        };
+        match translate_sse_line(data) {
+            Some(Delta::Content(s)) => text.push_str(&s),
+            Some(Delta::Reason(s)) => reasoning.push_str(&s),
+            Some(Delta::FinishUsage { finish: f, output: o }) => {
+                finish = f;
+                output = o;
+            }
+            Some(Delta::Usage { input: i, .. }) => input = i,
+            _ => {}
+        }
+    }
+    completion_frame(
+        &format!("chatcmpl-{}", uuid::Uuid::new_v4().simple()),
+        model,
+        &text,
+        &reasoning,
+        &finish,
+        input,
+        output,
+    )
+}
+
+/// 上游 anthropic SSE → OpenAI chat.completion.chunk 流式装配器（M3）。
+/// feed 吞任意切分的上游字节（内部按事件缓冲），返回可直接下发的 SSE 文本；finish 收尾并附 [DONE]。
+pub struct OpenAiStream {
+    model: String,
+    id: String,
+    buf: String,
+    role_sent: bool,
+    finish: String,
+    usage_in: i64,
+    usage_out: i64,
+}
+
+impl OpenAiStream {
+    pub fn new(model: &str) -> Self {
+        Self {
+            model: model.to_string(),
+            id: format!("chatcmpl-{}", uuid::Uuid::new_v4().simple()),
+            buf: String::new(),
+            role_sent: false,
+            finish: "stop".into(),
+            usage_in: 0,
+            usage_out: 0,
+        }
+    }
+
+    pub fn feed(&mut self, text: &str) -> String {
+        self.buf.push_str(text);
+        let mut out = String::new();
+        while let Some(pos) = self.buf.find("\n\n") {
+            let event: String = self.buf.drain(..pos + 2).collect();
+            for line in event.lines() {
+                let data = match line.strip_prefix("data: ") {
+                    Some(d) => d.trim(),
+                    None => continue,
+                };
+                match translate_sse_line(data) {
+                    Some(Delta::Usage { input, .. }) => {
+                        self.usage_in = input;
+                        if !self.role_sent {
+                            self.role_sent = true;
+                            out.push_str(&chunk_frame(
+                                &self.id,
+                                &self.model,
+                                json!({ "role": "assistant", "content": "" }),
+                                None,
+                            ));
+                        }
+                    }
+                    Some(Delta::Content(t)) => {
+                        out.push_str(&chunk_frame(&self.id, &self.model, json!({ "content": t }), None));
+                    }
+                    Some(Delta::Reason(t)) => {
+                        out.push_str(&chunk_frame(
+                            &self.id,
+                            &self.model,
+                            json!({ "reasoning_content": t }),
+                            None,
+                        ));
+                    }
+                    Some(Delta::ToolStart { index, id, name }) => {
+                        out.push_str(&chunk_frame(
+                            &self.id,
+                            &self.model,
+                            json!({ "tool_calls": [{ "index": index, "id": id, "type": "function", "function": { "name": name, "arguments": "" } }] }),
+                            None,
+                        ));
+                    }
+                    Some(Delta::ToolArgs { index, args }) => {
+                        out.push_str(&chunk_frame(
+                            &self.id,
+                            &self.model,
+                            json!({ "tool_calls": [{ "index": index, "function": { "arguments": args } }] }),
+                            None,
+                        ));
+                    }
+                    Some(Delta::FinishUsage { finish, output }) => {
+                        self.finish = finish;
+                        self.usage_out = output;
+                    }
+                    _ => {} // Role：translate_sse_line 现不产出；Error：上游 error 事件不透传流内
+                }
+            }
+        }
+        out
+    }
+
+    pub fn finish(&mut self) -> String {
+        let mut out = String::new();
+        if !self.role_sent {
+            self.role_sent = true;
+            out.push_str(&chunk_frame(
+                &self.id,
+                &self.model,
+                json!({ "role": "assistant", "content": "" }),
+                None,
+            ));
+        }
+        let final_chunk = json!({
+            "id": self.id,
+            "object": "chat.completion.chunk",
+            "created": chrono::Utc::now().timestamp(),
+            "model": self.model,
+            "choices": [{ "index": 0, "delta": {}, "finish_reason": self.finish }],
+            "usage": { "prompt_tokens": self.usage_in, "completion_tokens": self.usage_out, "total_tokens": self.usage_in + self.usage_out },
+        });
+        out.push_str(&format!("data: {final_chunk}\n\n"));
+        out.push_str(sse_done());
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_request_conversion() {
+        let req = json!({
+            "model": "glm-5.3-flash",
+            "messages": [
+                { "role": "system", "content": "be brief" },
+                { "role": "user", "content": [{ "type": "text", "text": "hi" }] },
+                { "role": "assistant", "content": "hello" },
+                { "role": "user", "content": "next" }
+            ],
+            "max_tokens": 100, "temperature": 0.5, "stop": "END",
+            "tools": [{ "type": "function", "function": { "name": "f", "description": "d", "parameters": { "type": "object" } } }]
+        });
+        let out = openai_to_upstream(&req).unwrap();
+        assert_eq!(out["model"], "GLM-5.3-Flash");
+        assert_eq!(out["stream"], true);
+        // openai.rs 前缀块不带 cache_control；system 追加段在最后
+        let sys = out["system"].as_array().unwrap();
+        assert_eq!(sys.last().unwrap()["text"], "be brief");
+        assert!(sys.last().unwrap().get("cache_control").is_none());
+        let msgs = out["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 3);
+        assert_eq!(msgs[1]["role"], "assistant");
+        assert_eq!(out["stop_sequences"], json!(["END"]));
+        assert_eq!(out["tools"][0]["name"], "f");
+        assert!(out["tools"][0]["input_schema"].is_object());
+    }
+
+    #[test]
+    fn stream_survives_split_events() {
+        let sse = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"你\"}}\n\n",
+            "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"好\"}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+        let mut s = OpenAiStream::new("GLM-5.3-Flash");
+        // 故意按撕裂事件边界切两半喂入，验证内部缓冲
+        let (a, b) = sse.split_at(sse.len() / 2);
+        let out = format!("{}{}", s.feed(a), s.feed(b));
+        assert!(out.contains("\"role\":\"assistant\""));
+        assert_eq!(out.matches("\"content\":\"你\"").count(), 1);
+        assert_eq!(out.matches("\"content\":\"好\"").count(), 1);
+        let fin = s.finish();
+        assert!(fin.contains("\"finish_reason\":\"stop\""));
+        assert!(fin.contains("\"total_tokens\":11"));
+        assert!(fin.contains("data: [DONE]"));
+    }
+
+    #[test]
+    fn aggregate_nonstream() {
+        let sse = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9}}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\",\"thinking\":\"想\"}}\n\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"你好\"}}\n\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n",
+        );
+        let out = aggregate_sse_to_openai(sse, "GLM-5.3-Flash");
+        assert_eq!(out["object"], "chat.completion");
+        assert_eq!(out["choices"][0]["message"]["content"], "你好");
+        assert_eq!(out["choices"][0]["message"]["reasoning_content"], "想");
+        assert_eq!(out["choices"][0]["finish_reason"], "stop");
+        assert_eq!(out["usage"]["total_tokens"], 11);
+    }
 }

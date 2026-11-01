@@ -7,7 +7,7 @@ mod oauth;
 mod probe;
 mod quota;
 mod store;
-mod gateway;
+pub mod gateway;
 mod zcrypto;
 
 use serde_json::{json, Value};
@@ -1251,6 +1251,10 @@ async fn gateway_start(
         let mut cfg = state.config.lock().map_err(|e| e.to_string())?;
         if let Some(p) = port { cfg.port = p; }
         if let Some(k) = api_key { if !k.trim().is_empty() { cfg.api_key = k.trim().to_string(); } }
+        // 落盘：不保存的话新端口/密钥重启即丢，UI 上的「保存」就成了骗局
+        if let Err(e) = cfg.save() {
+            eprintln!("[gateway] 配置落盘失败: {e}");
+        }
     }
     let started = state.start()?;
     Ok(json!({ "running": state.is_running(), "started": started }))
@@ -1273,7 +1277,8 @@ async fn gateway_status(app: tauri::AppHandle) -> Result<serde_json::Value, Stri
     Ok(json!({
         "running": state.is_running(),
         "port": cfg.port,
-        // 密钥只回掩码，明文永不回前端
+        // 密钥明文回前端：本机 UI 是唯一操作者，密钥本来就是要填进第三方客户端的，藏起来只有掩码没有意义
+        "apiKey": cfg.api_key,
         "apiKeyMasked": if cfg.api_key.len() > 8 {
             format!("{}…{}", &cfg.api_key[..6], &cfg.api_key[cfg.api_key.len()-4..])
         } else { "***".to_string() },

@@ -4,6 +4,8 @@ version = "1.7.0-beta.1"
 description = "ZCode 账号切换器"
 license = "MIT"
 edition = "2021"
+# bin/gatewayd.rs 是第二个二进制（无头网关）；tauri dev 的 cargo run 需要 default-run 指主程序
+default-run = "zcode-switch"
 
 [lib]
 name = "zcode_switch_lib"

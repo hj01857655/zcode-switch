@@ -1,4 +1,4 @@
-// GATEWAY 配置：端口、调用方鉴权密钥，落 ~/.zcode-switch/gateway.json
+// GATEWAY 配置：端口、调用方鉴权密钥，落 ~/.zcode-switch/gateway.json（与账号库同目录）
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -21,7 +21,7 @@ impl Default for GatewayConfig {
 
 impl GatewayConfig {
     fn path() -> PathBuf {
-        crate::Paths::detect().home.join("gateway.json")
+        crate::Paths::detect().store_dir().join("gateway.json")
     }
 
     pub fn load() -> Self {

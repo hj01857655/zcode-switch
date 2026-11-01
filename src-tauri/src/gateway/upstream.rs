@@ -25,11 +25,42 @@ impl std::fmt::Display for UpstreamError {
 /// billing/touch 通道仍走 quota.rs 的注册表真实探测（那边 3.17.1 才能拿投放）。
 const SAFE_APP_VERSION: &str = "3.16.3";
 
+/// 自动降级档：SAFE 自述撞风控后锁存到此（3.14.0 单头实测 200；全头族组合未单独验过，
+/// 但降级只在 SAFE 已被拒时发生，劣化风险为零）。
+const FALLBACK_APP_VERSION: &str = "3.14.0";
+
+static VERSION_DOWNGRADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 生效版本：环境变量手动钉 > 自动降级锁存 > 默认 SAFE
+pub fn effective_app_version() -> String {
+    if let Ok(v) = std::env::var("ZCODE_GATEWAY_APP_VERSION") {
+        if !v.is_empty() {
+            return v;
+        }
+    }
+    if VERSION_DOWNGRADED.load(std::sync::atomic::Ordering::SeqCst) {
+        FALLBACK_APP_VERSION.into()
+    } else {
+        SAFE_APP_VERSION.into()
+    }
+}
+
+/// 降级闩：SAFE 版本自述撞 405/3012 时锁存切到 FALLBACK，下一发请求生效（失败那发
+/// 不重试，is_global_risk 的全局退避照旧）。不自动回升——解除降级由人工改代码或重启进程。
+pub fn note_risk_response(status: u16, body: &str) {
+    if !is_global_risk(status, body) {
+        return;
+    }
+    if std::env::var("ZCODE_GATEWAY_APP_VERSION").map(|v| !v.is_empty()).unwrap_or(false) {
+        return; // 手动钉版本做归因实验时不介入，保持实验环境可控
+    }
+    if !VERSION_DOWNGRADED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        eprintln!("[gateway] 版本自述 {SAFE_APP_VERSION} 撞风控（{status}），锁存降级到 {FALLBACK_APP_VERSION}");
+    }
+}
+
 pub fn headers(token: &str, mid: Option<&str>) -> Vec<(String, String)> {
-    let ver = std::env::var("ZCODE_GATEWAY_APP_VERSION")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| SAFE_APP_VERSION.to_string());
+    let ver = effective_app_version();
     let mut h: Vec<(String, String)> = vec![
         ("User-Agent".into(), format!("ZCode/{ver}")),
         ("HTTP-Referer".into(), "https://zcode.z.ai".into()),

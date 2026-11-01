@@ -8,7 +8,7 @@ use axum::routing::{get, post};
 use serde_json::{json, Value};
 use tokio::sync::watch;
 
-use super::{pool, translate, upstream};
+use super::{openai, pool, translate, upstream};
 
 struct SvcState {
     api_key: String,
@@ -155,7 +155,7 @@ async fn chat_completions(
         .unwrap_or("GLM-5.3-Flash")
         .to_string();
     let stream = req.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
-    let prepared = translate::openai_to_upstream(&req)
+    let prepared = openai::openai_to_upstream(&req)
         .map_err(|e| (StatusCode::BAD_REQUEST, api_error("invalid_request_error", &e)))?;
     let prepared = serde_json::to_vec(&prepared).map_err(|e| {
         (StatusCode::INTERNAL_SERVER_ERROR, api_error("api_error", &e.to_string()))
@@ -168,7 +168,7 @@ async fn chat_completions(
             })?,
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
-        return Ok(Json(translate::aggregate_sse_to_openai(&raw, &model)).into_response());
+        return Ok(Json(openai::aggregate_sse_to_openai(&raw, &model)).into_response());
     }
 
     let resp = match farm_send(&state, &prepared, "/v1/chat/completions").await? {
@@ -176,12 +176,12 @@ async fn chat_completions(
     };
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<bytes::Bytes, std::io::Error>>(16);
     tokio::spawn(async move {
-        let mut chunker = translate::OpenAiChunker::new(&model);
+        let mut stream = openai::OpenAiStream::new(&model);
         let mut resp = resp;
         loop {
             match resp.chunk().await {
                 Ok(Some(c)) => {
-                    let out = chunker.feed(&String::from_utf8_lossy(&c));
+                    let out = stream.feed(&String::from_utf8_lossy(&c));
                     if !out.is_empty() && tx.send(Ok(bytes::Bytes::from(out))).await.is_err() {
                         break; // 客户端断开
                     }
@@ -193,7 +193,7 @@ async fn chat_completions(
                 }
             }
         }
-        let fin = chunker.finish();
+        let fin = stream.finish();
         let _ = tx.send(Ok(bytes::Bytes::from(fin))).await;
     });
     let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
@@ -252,6 +252,7 @@ async fn farm_send(
                     "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
                     "ep": ep, "account": m.name, "status": up.status, "ok": false,
                 }));
+                upstream::note_risk_response(up.status, &up.body);
                 if upstream::is_global_risk(up.status, &up.body) {
                     state.shared.farm.global_backoff(pool::GLOBAL_BACKOFF_SECS);
                     return Err((
