@@ -265,7 +265,10 @@ async fn get_account_quota(id: String) -> Result<quota::QuotaOverview, String> {
 #[tauri::command]
 async fn claim_preview(id: String) -> Result<Vec<claim::ClaimPlan>, String> {
     let paths = Paths::detect();
-    let mid = store::ensure_virtual_device_mid(&paths, &id)?;
+    // mid 闸（plan-50 §2.6）：billing/marketing 的 X-Device-Mid 只认 live telemetry mid，virtual mid 一律 3001
+    let mid = quota::device_mid()
+        .or_else(|| store::ensure_virtual_device_mid(&paths, &id).ok())
+        .ok_or_else(|| "no device_mid available".to_string())?;
     let acc = load_account(&paths, &id)?;
     claim::preview_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid))
 }
@@ -281,7 +284,10 @@ struct ClaimRefreshResult {
 #[tauri::command]
 async fn claim_refresh(id: String) -> Result<ClaimRefreshResult, String> {
     let paths = Paths::detect();
-    let mid = store::ensure_virtual_device_mid(&paths, &id)?;
+    // mid 闸：X-Device-Mid 只认 live telemetry mid（同 claim_preview）
+    let mid = quota::device_mid()
+        .or_else(|| store::ensure_virtual_device_mid(&paths, &id).ok())
+        .ok_or_else(|| "no device_mid available".to_string())?;
     let acc = load_account(&paths, &id)?;
     let (activated, activation_error) =
         match claim::telemetry_user_id(&paths.home, &acc.credentials) {
@@ -303,7 +309,10 @@ async fn claim_start(
     auto: Option<bool>,
 ) -> Result<serde_json::Value, String> {
     let paths = Paths::detect();
-    let mid = store::ensure_virtual_device_mid(&paths, &id)?;
+    // mid 闸：X-Device-Mid 只认 live telemetry mid（同 claim_preview）
+    let mid = quota::device_mid()
+        .or_else(|| store::ensure_virtual_device_mid(&paths, &id).ok())
+        .ok_or_else(|| "no device_mid available".to_string())?;
     let acc = load_account(&paths, &id)?;
     let plans = claim::preview_plans(&paths.home, &acc.credentials, acc.config.as_ref(), Some(mid.clone()))?;
     let plan = plans
