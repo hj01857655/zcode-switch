@@ -2,6 +2,8 @@
 
 **简体中文** ｜ [English](README.en.md)
 
+> **项目来源**：本仓库是 [pjpv/zcode-switch](https://github.com/pjpv/zcode-switch) 的 fork，在其基础上持续开发（安全加固、额度体系、本地网关等增强见下）。上游的原始设计与核心架构归功于原作者；本 fork 的全部增量以同 License（MIT）回馈社区，向上游的 issue/PR 欢迎各取所需。
+
 Tauri 2 桌面工具：在多个 ZCode 账号之间一键切换，自动显示额度。只换登录身份——项目、会话、设置全部共用不动。
 
 ![screenshot](docs/screenshot.png)
@@ -71,4 +73,4 @@ Windows 优先（路径探测 / 进程管理 / 托盘均为 Win32 语义）。
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE)——上游原作（pjpv）与本 fork 增强的版权行均在 LICENSE 内；衍生分发请保留两行。

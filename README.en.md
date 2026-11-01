@@ -2,6 +2,8 @@
 
 [简体中文](README.md) ｜ **English**
 
+> **Provenance**: this repository is a fork of [pjpv/zcode-switch](https://github.com/pjpv/zcode-switch), developed further on top of it (security hardening, the quota system, the local gateway, etc. — see below). The original design and core architecture belong to the upstream author; all additions in this fork are shared back under the same license (MIT).
+
 A Tauri 2 desktop tool for one-click switching between multiple ZCode accounts, with live quota display. Only the login identity changes — projects, sessions, settings and plugins all stay untouched.
 
 ![screenshot](docs/screenshot.png)
@@ -71,4 +73,4 @@ Windows-first (path detection / process management / tray are all Win32 semantic
 
 ## License
 
-[MIT](./LICENSE)
+[MIT](./LICENSE) — copyright lines for both the upstream original work (pjpv) and this fork's enhancements are in LICENSE; derivative distributions should keep both.
