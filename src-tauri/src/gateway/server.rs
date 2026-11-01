@@ -115,6 +115,8 @@ async fn messages(
     if let Err(code) = check_auth(&state, &headers) {
         return Err((code, api_error("authentication_error", "invalid api key")));
     }
+    // 请求关联 ID：换号重试产生的多条日志共用；错误响应体回传供客户端对账
+    let req_id = uuid::Uuid::new_v4().simple().to_string();
     let body_json: Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(e) => return Err((StatusCode::BAD_REQUEST, api_error("invalid_request_error", &e.to_string()))),
@@ -125,6 +127,8 @@ async fn messages(
         .unwrap_or("GLM-5.3-Flash")
         .to_string();
     let stream = body_json.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+    let session = session_of(&headers, &body_json);
+    let sticky = session.as_deref().map_or(pool::Sticky::None, pool::Sticky::Session);
     let prepared = match translate::anthropic_to_upstream(&body_json) {
         Ok(v) => v,
         Err(e) => return Err((StatusCode::BAD_REQUEST, api_error("invalid_request_error", &e))),
@@ -134,7 +138,7 @@ async fn messages(
     })?;
     let req_preview = clip(&String::from_utf8_lossy(&body), LOG_REQ_CAP);
     if !stream {
-        let ok = pool_send(&state, &prepared, "/v1/messages", &model, stream, &req_preview).await?;
+        let ok = pool_send(&state, &prepared, "/v1/messages", &model, stream, &req_preview, &req_id, sticky).await?;
         let bytes = match ok.reply {
             UpstreamReply::Stream(resp) => resp.bytes().await.map_err(|e| {
                 (StatusCode::BAD_GATEWAY, api_error("api_error", &e.to_string()))
@@ -142,12 +146,12 @@ async fn messages(
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let out = translate::aggregate_sse(&raw, &model);
-        push_ok_log(&state.shared, "/v1/messages", &ok.account, ok.ms, ok.attempt, &model, stream, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
+        push_ok_log(&state.shared, "/v1/messages", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, stream, &req_id, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
         return Ok(Json(out).into_response());
     }
     // 流式：上游 SSE 原样透传（Anthropic 原生客户端，事件形态一致，零转换）
-    let ok = pool_send(&state, &prepared, "/v1/messages", &model, stream, &req_preview).await?;
-    let UpstreamOk { reply, account, ms, attempt } = ok;
+    let ok = pool_send(&state, &prepared, "/v1/messages", &model, stream, &req_preview, &req_id, sticky).await?;
+    let UpstreamOk { reply, account, attempt, ttft_ms, started, req_id } = ok;
     let resp = match reply {
         UpstreamReply::Stream(r) => r,
     };
@@ -166,7 +170,7 @@ async fn messages(
         }
         push_ok_log(
             &shared,
-            "/v1/messages", &account, ms, attempt, &model, stream, &req_preview, Some(clip(&acc, LOG_RESP_CAP)),
+            "/v1/messages", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, stream, &req_id, &req_preview, Some(clip(&acc, LOG_RESP_CAP)),
         );
     });
     let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
@@ -185,6 +189,8 @@ async fn chat_completions(
     if let Err(code) = check_auth(&state, &headers) {
         return Err((code, api_error("authentication_error", "invalid api key")));
     }
+    // 请求关联 ID：换号重试产生的多条日志共用；错误响应体回传供客户端对账
+    let req_id = uuid::Uuid::new_v4().simple().to_string();
     let req: Value = serde_json::from_slice(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, api_error("invalid_request_error", &e.to_string())))?;
     let model = req
@@ -193,6 +199,8 @@ async fn chat_completions(
         .unwrap_or("GLM-5.3-Flash")
         .to_string();
     let stream = req.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+    let session = session_of(&headers, &req);
+    let sticky = session.as_deref().map_or(pool::Sticky::None, pool::Sticky::Session);
     let prepared = openai::openai_to_upstream(&req)
         .map_err(|e| (StatusCode::BAD_REQUEST, api_error("invalid_request_error", &e)))?;
     let prepared = serde_json::to_vec(&prepared).map_err(|e| {
@@ -200,7 +208,7 @@ async fn chat_completions(
     })?;
     let req_preview = clip(&String::from_utf8_lossy(&body), LOG_REQ_CAP);
     if !stream {
-        let ok = pool_send(&state, &prepared, "/v1/chat/completions", &model, stream, &req_preview).await?;
+        let ok = pool_send(&state, &prepared, "/v1/chat/completions", &model, stream, &req_preview, &req_id, sticky).await?;
         let bytes = match ok.reply {
             UpstreamReply::Stream(resp) => resp.bytes().await.map_err(|e| {
                 (StatusCode::BAD_GATEWAY, api_error("api_error", &e.to_string()))
@@ -208,12 +216,12 @@ async fn chat_completions(
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let out = openai::aggregate_sse_to_openai(&raw, &model);
-        push_ok_log(&state.shared, "/v1/chat/completions", &ok.account, ok.ms, ok.attempt, &model, stream, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
+        push_ok_log(&state.shared, "/v1/chat/completions", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, stream, &req_id, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
         return Ok(Json(out).into_response());
     }
 
-    let ok = pool_send(&state, &prepared, "/v1/chat/completions", &model, stream, &req_preview).await?;
-    let UpstreamOk { reply, account, ms, attempt } = ok;
+    let ok = pool_send(&state, &prepared, "/v1/chat/completions", &model, stream, &req_preview, &req_id, sticky).await?;
+    let UpstreamOk { reply, account, attempt, ttft_ms, started, req_id } = ok;
     let resp = match reply {
         UpstreamReply::Stream(r) => r,
     };
@@ -246,7 +254,7 @@ async fn chat_completions(
             acc.push_str(&fin);
         }
         let _ = tx.send(Ok(bytes::Bytes::from(fin))).await;
-        push_ok_log(&shared, "/v1/chat/completions", &account, ms, attempt, &model, stream, &req_preview, Some(clip(&acc, LOG_RESP_CAP)));
+        push_ok_log(&shared, "/v1/chat/completions", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, stream, &req_id, &req_preview, Some(clip(&acc, LOG_RESP_CAP)));
     });
     let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
     resp.headers_mut()
@@ -309,12 +317,16 @@ fn cors_headers(resp: &mut Response, origin: &str, preflight: bool) {
     }
 }
 
-/// pool_send 成功后的登记材料：成功日志由 handler 推（响应体聚合完成后才完整）
+/// pool_send 成功后的登记材料：成功日志由 handler 推（响应体聚合完成后才完整）。
+/// started 用于 handler 在消费点算总耗时；ttft_ms = 上游响应头到达（流式即首帧）时间
 struct UpstreamOk {
     reply: UpstreamReply,
     account: String,
-    ms: u64,
     attempt: usize,
+    ttft_ms: u64,
+    started: std::time::Instant,
+    /// 请求关联 ID：一次客户端请求（含换号重试产生的多条日志）共用
+    req_id: String,
 }
 
 /// 日志 body 截断：超长按字符裁切并标记，避免单条请求把日志环/落盘撑爆
@@ -391,9 +403,11 @@ fn push_ok_log(
     ep: &str,
     account: &str,
     ms: u64,
+    ttft_ms: u64,
     attempt: usize,
     model: &str,
     stream: bool,
+    req_id: &str,
     req: &str,
     resp: Option<String>,
 ) {
@@ -402,16 +416,37 @@ fn push_ok_log(
         "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         "ep": ep, "account": account, "status": 200, "ok": true,
         "model": model, "stream": stream,
-        "ms": ms, "attempt": attempt,
+        "ms": ms, "ttft": ttft_ms, "attempt": attempt,
+        "req_id": req_id,
         "tin": tin, "tout": tout, "tcr": tcr, "tcw": tcw,
         "req": req,
         "resp": resp,
     }));
 }
+/// pool 分发：选号 → 发上游 → 按错误档收尾。
+/// 粘性优先（成功游标不动）；429/3008-3010/网络错误换号重放（重试次数可配）；
+/// 3012/405 全局退避（时长可配）；全员不可用 503。members/claim_token 都是阻塞面（文件 IO + 解密），丢 blocking 池。
+/// 会话标识提取（LiteLLM session affinity 同思路）：专用头优先，其次 body.metadata。
+fn session_of(headers: &HeaderMap, body: &Value) -> Option<String> {
+    for h in ["x-session-id", "x-claude-code-session-id", "x-litellm-session-id"] {
+        if let Some(v) = headers.get(h).and_then(|v| v.to_str().ok()).filter(|s| !s.is_empty()) {
+            return Some(v.to_string());
+        }
+    }
+    body.pointer("/metadata/session_id")
+        .or_else(|| body.pointer("/metadata/user_id"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+}
+
 
 /// pool 分发：选号 → 发上游 → 按错误档收尾。
 /// 粘性优先（成功游标不动）；429/3008-3010/网络错误换号重放（重试次数可配）；
 /// 3012/405 全局退避（时长可配）；全员不可用 503。members/claim_token 都是阻塞面（文件 IO + 解密），丢 blocking 池。
+/// 会话标识提取（LiteLLM session affinity 同思路）：专用头优先，其次 body.metadata。
+
+
 async fn pool_send(
     state: &SvcState,
     prepared: &[u8],
@@ -419,42 +454,47 @@ async fn pool_send(
     model: &str,
     stream: bool,
     req_preview: &str,
+    req_id: &str,
+    sticky: pool::Sticky<'_>,
 ) -> Result<UpstreamOk, (StatusCode, Json<Value>)> {
     let members = match tokio::task::spawn_blocking(pool::members).await {
         Ok(Ok(m)) => m,
-        Ok(Err(e)) => return Err((StatusCode::SERVICE_UNAVAILABLE, api_error("api_error", &e))),
-        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, api_error("api_error", &e.to_string()))),
+        Ok(Err(e)) => return Err((StatusCode::SERVICE_UNAVAILABLE, api_error_id("api_error", &e, req_id))),
+        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, api_error_id("api_error", &e.to_string(), req_id))),
     };
     if members.is_empty() {
         return Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            api_error("api_error", "pool: no logged-in account"),
+            api_error_id("api_error", "pool: no logged-in account", req_id),
         ));
     }
     // 初始尝试 + max_retries 次换号重放；全部失败即把最后的错误交回客户端
     for attempt in 0..=state.max_retries as usize {
-        let Some(idx) = state.shared.pool.pick(&members) else {
+        let Some(idx) = state.shared.pool.pick(&members, sticky) else {
             let wait = state.shared.pool.global_backoff_secs().max(1);
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
-                api_error("api_error", &format!("pool unavailable, retry after {wait}s")),
+                api_error_id("api_error", &format!("pool unavailable, retry after {wait}s"), req_id),
             ));
         };
         let m = &members[idx];
         let t0 = std::time::Instant::now();
         match upstream::messages_stream(&state.http, &m.token, m.mid.as_deref(), prepared).await {
             Ok(resp) => {
-                state.shared.pool.settle(&m.id, idx, members.len(), true, 0);
+                state.shared.pool.settle(&m.id, idx, members.len(), true, 0, sticky);
                 return Ok(UpstreamOk {
                     reply: UpstreamReply::Stream(resp),
                     account: m.name.clone(),
-                    ms: t0.elapsed().as_millis() as u64,
+                    // ttft = 上游响应头到达（流式即首帧前导时间）；总耗时由消费点用 started 结算
+                    ttft_ms: t0.elapsed().as_millis() as u64,
+                    started: t0,
                     attempt,
+                    req_id: req_id.to_string(),
                 });
             }
             Err(up) => {
                 let cd = upstream::cooldown_secs(up.status, &up.body);
-                state.shared.pool.settle(&m.id, idx, members.len(), false, cd);
+                state.shared.pool.settle(&m.id, idx, members.len(), false, cd, sticky);
                 // 错误摘要：body 截前 200 字符，展开详情用
                 let err_sum: String = up.body.chars().take(200).collect();
                 state.shared.push_log(json!({
@@ -463,6 +503,7 @@ async fn pool_send(
                     "model": model, "stream": stream,
                     "ms": t0.elapsed().as_millis() as u64,
                     "attempt": attempt,
+                    "req_id": req_id,
                     "err": err_sum,
                     "req": req_preview,
                 }));
@@ -471,7 +512,7 @@ async fn pool_send(
                     state.shared.pool.global_backoff(state.backoff_secs);
                     return Err((
                         StatusCode::from_u16(up.status).unwrap_or(StatusCode::FORBIDDEN),
-                        api_error("upstream_error", &up.body),
+                        api_error_id("upstream_error", &up.body, req_id),
                     ));
                 }
                 if attempt < state.max_retries as usize && upstream::is_retryable(up.status, &up.body) {
@@ -479,7 +520,7 @@ async fn pool_send(
                 }
                 return Err((
                     StatusCode::from_u16(up.status).unwrap_or(StatusCode::BAD_GATEWAY),
-                    api_error("upstream_error", &up.body),
+                    api_error_id("upstream_error", &up.body, req_id),
                 ));
             }
         }
@@ -489,6 +530,11 @@ async fn pool_send(
 
 fn api_error(typ: &str, msg: &str) -> Json<Value> {
     Json(json!({ "error": { "type": typ, "message": msg } }))
+}
+
+/// 带 req_id 的错误响应：客户端报错时引用此 ID 即可对到日志
+fn api_error_id(typ: &str, msg: &str, req_id: &str) -> Json<Value> {
+    Json(json!({ "error": { "type": typ, "message": msg, "req_id": req_id } }))
 }
 
 /// /v1/responses（M4/M5）：OpenAI Responses 入站 → anthropic 上游。
@@ -502,10 +548,14 @@ async fn responses_endpoint(
     if let Err(code) = check_auth(&state, &headers) {
         return Err((code, api_error("authentication_error", "invalid api key")));
     }
+    // 请求关联 ID：换号重试产生的多条日志共用；错误响应体回传供客户端对账
+    let req_id = uuid::Uuid::new_v4().simple().to_string();
     let req: Value = serde_json::from_slice(&body)
         .map_err(|e| (StatusCode::BAD_REQUEST, api_error("invalid_request_error", &e.to_string())))?;
     let model = super::translate::map_model(get_str_req(&req, "model"));
     let stream = req.get("stream").and_then(|s| s.as_bool()).unwrap_or(false);
+    let session = session_of(&headers, &req);
+    let sticky = session.as_deref().map_or(pool::Sticky::None, pool::Sticky::Session);
     let prepared = super::responses::responses_to_upstream(&req)
         .map_err(|e| (StatusCode::BAD_REQUEST, api_error("invalid_request_error", &e)))?;
     let prepared = serde_json::to_vec(&prepared).map_err(|e| {
@@ -513,7 +563,7 @@ async fn responses_endpoint(
     })?;
     let req_preview = clip(&String::from_utf8_lossy(&body), LOG_REQ_CAP);
     if !stream {
-        let ok = pool_send(&state, &prepared, "/v1/responses", &model, false, &req_preview).await?;
+        let ok = pool_send(&state, &prepared, "/v1/responses", &model, false, &req_preview, &req_id, sticky).await?;
         let bytes = match ok.reply {
             UpstreamReply::Stream(resp) => resp.bytes().await.map_err(|e| {
                 (StatusCode::BAD_GATEWAY, api_error("api_error", &e.to_string()))
@@ -521,11 +571,11 @@ async fn responses_endpoint(
         };
         let raw = String::from_utf8_lossy(&bytes).into_owned();
         let out = super::responses::aggregate_sse_to_responses(&raw, &model);
-        push_ok_log(&state.shared, "/v1/responses", &ok.account, ok.ms, ok.attempt, &model, false, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
+        push_ok_log(&state.shared, "/v1/responses", &ok.account, ok.started.elapsed().as_millis() as u64, ok.ttft_ms, ok.attempt, &model, false, &req_id, &req_preview, Some(clip(&out.to_string(), LOG_RESP_CAP)));
         return Ok(Json(out).into_response());
     }
-    let ok = pool_send(&state, &prepared, "/v1/responses", &model, true, &req_preview).await?;
-    let UpstreamOk { reply, account, ms, attempt } = ok;
+    let ok = pool_send(&state, &prepared, "/v1/responses", &model, true, &req_preview, &req_id, sticky).await?;
+    let UpstreamOk { reply, account, attempt, ttft_ms, started, req_id } = ok;
     let resp = match reply {
         UpstreamReply::Stream(r) => r,
     };
@@ -562,7 +612,7 @@ async fn responses_endpoint(
             acc.push_str(&fin);
         }
         let _ = tx.send(Ok(bytes::Bytes::from(fin))).await;
-        push_ok_log(&shared, "/v1/responses", &account, ms, attempt, &model, true, &req_preview, Some(clip(&acc, LOG_RESP_CAP)));
+        push_ok_log(&shared, "/v1/responses", &account, started.elapsed().as_millis() as u64, ttft_ms, attempt, &model, true, &req_id, &req_preview, Some(clip(&acc, LOG_RESP_CAP)));
     });
     let mut resp = Response::new(Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx)));
     resp.headers_mut()

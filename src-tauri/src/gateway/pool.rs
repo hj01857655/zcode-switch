@@ -11,11 +11,24 @@ pub const MAX_INFLIGHT: u32 = 2;
 /// 3012/405 全局退避：WAF 判的是 IP+指纹不是账号，单号冷却会让重放循环把整池指纹喂脏
 pub const GLOBAL_BACKOFF_SECS: u64 = 10 * 60;
 
+/// 会话 pin 空闲 TTL：超过该时长无请求即解钉（LiteLLM session affinity 同思路）
+pub const SESSION_TTL_SECS: u64 = 30 * 60;
+/// pin 表上限：防多客户端会话堆积，超限丢最旧一半
+const SESSION_CAP: usize = 512;
+
 pub struct PoolMember {
     pub id: String,
     pub name: String,
     pub token: String,
     pub mid: Option<String>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum Sticky<'a> {
+    /// 无会话标识：走全局游标粘性
+    None,
+    /// 会话粘性：同 session 钉同号（多会话并发时互不冲掉上游 prompt cache）
+    Session(&'a str),
 }
 
 #[derive(Default)]
@@ -28,6 +41,8 @@ struct Inner {
     inflight: HashMap<String, u32>,
     cool: HashMap<String, Instant>,
     global_until: Option<Instant>,
+    /// session → (member_id, 最近命中)。会话亲和独立于全局粘性开关：带标识即钉
+    sessions: HashMap<String, (String, Instant)>,
     /// 累计请求计数（成功/失败，settle 落账）
     total_ok: u64,
     total_err: u64,
@@ -53,11 +68,22 @@ impl Pool {
         if inner.global_until.is_some_and(|t| t <= now) {
             inner.global_until = None;
         }
+        // 会话 pin 过期清理；仍超上限丢最旧一半（HashMap 无序，drain 随机近似最旧，够用）
+        let ttl = Duration::from_secs(SESSION_TTL_SECS);
+        inner.sessions.retain(|_, (_, seen)| now.duration_since(*seen) < ttl);
+        if inner.sessions.len() > SESSION_CAP {
+            let drop = inner.sessions.len() - SESSION_CAP / 2;
+            let ids: Vec<String> = inner.sessions.keys().take(drop).cloned().collect();
+            for id in ids {
+                inner.sessions.remove(&id);
+            }
+        }
     }
 
     /// 选下一个可用号：跳过冷却中 / 在飞超限的成员，成功后 cursor 粘在被选号。
+    /// 带 session：优先命中 pin 表里的号（可缓存亲和，独立于全局粘性开关），pin 失效才走游标。
     /// 返回 None = 全局退避中，或全员不可用（用 global_backoff_secs 区分）。
-    pub fn pick(&self, members: &[PoolMember]) -> Option<usize> {
+    pub fn pick(&self, members: &[PoolMember], sticky: Sticky<'_>) -> Option<usize> {
         let mut inner = self.0.lock().ok()?;
         Self::sweep(&mut inner);
         if inner.global_until.is_some() {
@@ -66,6 +92,22 @@ impl Pool {
         let n = members.len();
         if n == 0 {
             return None;
+        }
+        // 会话 pin 命中：号还在池、不在冷却、在飞未满才直接用；否则落回游标扫描并重新 pin
+        if let Sticky::Session(sid) = sticky {
+            if let Some((mid, _seen)) = inner.sessions.get(sid) {
+                let mid = mid.clone();
+                inner.sessions.get_mut(sid).unwrap().1 = Instant::now();
+                if let Some(idx) = members.iter().position(|m| m.id == mid) {
+                    let m = &members[idx];
+                    if !inner.cool.contains_key(&m.id)
+                        && inner.inflight.get(&m.id).copied().unwrap_or(0) < MAX_INFLIGHT
+                    {
+                        *inner.inflight.entry(m.id.clone()).or_insert(0) += 1;
+                        return Some(idx);
+                    }
+                }
+            }
         }
         for i in 0..n {
             let idx = (inner.cursor + i) % n;
@@ -78,14 +120,18 @@ impl Pool {
             }
             *inner.inflight.entry(m.id.clone()).or_insert(0) += 1;
             inner.cursor = idx;
+            // 新选中的号记为该会话的 pin（settle 失败时解除）
+            if let Sticky::Session(sid) = sticky {
+                inner.sessions.insert(sid.to_string(), (m.id.clone(), Instant::now()));
+            }
             return Some(idx);
         }
         None
     }
 
-    /// 请求收尾：在飞 -1；失败时游标挪到下一号并按档落冷却；
+    /// 请求收尾：在飞 -1；失败时游标挪到下一号并按档落冷却、解除该会话 pin；
     /// 成功时仅粘性关才挪游标（轮换分摊）——粘性的全部实现就是这一处分支
-    pub fn settle(&self, member_id: &str, idx: usize, member_count: usize, ok: bool, cooldown_secs: u64) {
+    pub fn settle(&self, member_id: &str, idx: usize, member_count: usize, ok: bool, cooldown_secs: u64, sticky: Sticky<'_>) {
         let mut inner = match self.0.lock() {
             Ok(g) => g,
             Err(_) => return,
@@ -97,10 +143,16 @@ impl Pool {
         if member_count > 0 && (!ok || !inner.sticky) {
             inner.cursor = (idx + 1) % member_count;
         }
-        if !ok && cooldown_secs > 0 {
-            inner
-                .cool
-                .insert(member_id.to_string(), Instant::now() + Duration::from_secs(cooldown_secs));
+        if !ok {
+            if let Sticky::Session(sid) = sticky {
+                // 失败解钉：下次该会话重新选号（settle 里重新 pin 的活由 pick 负责）
+                inner.sessions.remove(sid);
+            }
+            if cooldown_secs > 0 {
+                inner
+                    .cool
+                    .insert(member_id.to_string(), Instant::now() + Duration::from_secs(cooldown_secs));
+            }
         }
     }
 
@@ -203,19 +255,42 @@ mod tests {
         let m = members2();
         let pool = Pool::new();
         // 粘性：成功后驻留同号
-        let i = pool.pick(&m).unwrap();
-        pool.settle(&m[i].id, i, m.len(), true, 0);
-        assert_eq!(pool.pick(&m).unwrap(), i);
+        let i = pool.pick(&m, Sticky::None).unwrap();
+        pool.settle(&m[i].id, i, m.len(), true, 0, Sticky::None);
+        assert_eq!(pool.pick(&m, Sticky::None).unwrap(), i);
         // 轮换：成功也让游标前移
         pool.set_sticky(false);
-        let i = pool.pick(&m).unwrap();
-        pool.settle(&m[i].id, i, m.len(), true, 0);
-        assert_eq!(pool.pick(&m).unwrap(), (i + 1) % m.len());
+        let i = pool.pick(&m, Sticky::None).unwrap();
+        pool.settle(&m[i].id, i, m.len(), true, 0, Sticky::None);
+        assert_eq!(pool.pick(&m, Sticky::None).unwrap(), (i + 1) % m.len());
         // 失败永远换号 + 落冷却
-        let i = pool.pick(&m).unwrap();
-        pool.settle(&m[i].id, i, m.len(), false, 60);
-        let j = pool.pick(&m).unwrap();
+        let i = pool.pick(&m, Sticky::None).unwrap();
+        pool.settle(&m[i].id, i, m.len(), false, 60, Sticky::None);
+        let j = pool.pick(&m, Sticky::None).unwrap();
         assert_ne!(j, i);
         assert!(pool.snapshot(&m)["members"][i]["cooldown_secs"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn session_affinity_pins_and_releases() {
+        let m = members2();
+        let pool = Pool::new();
+        // 轮换模式（全局粘性关）：无 session 的 pick 逐号分摊……
+        pool.set_sticky(false);
+        let a = pool.pick(&m, Sticky::None).unwrap();
+        pool.settle(&m[a].id, a, m.len(), true, 0, Sticky::None);
+        // ……但带 session 的请求仍钉在同一号（会话亲和独立于全局游标）
+        let s = pool.pick(&m, Sticky::Session("S1")).unwrap();
+        pool.settle(&m[s].id, s, m.len(), true, 0, Sticky::Session("S1"));
+        assert_eq!(pool.pick(&m, Sticky::Session("S1")).unwrap(), s);
+        // 失败解钉 + 号落冷却：同 session 下次换到别的号
+        pool.settle(&m[s].id, s, m.len(), false, 60, Sticky::Session("S1"));
+        let j = pool.pick(&m, Sticky::Session("S1")).unwrap();
+        assert_ne!(j, s);
+        // 粘性模式（开关开）：session pin 与全局游标都驻留
+        pool.set_sticky(true);
+        let k = pool.pick(&m, Sticky::Session("S2")).unwrap();
+        pool.settle(&m[k].id, k, m.len(), true, 0, Sticky::Session("S2"));
+        assert_eq!(pool.pick(&m, Sticky::Session("S2")).unwrap(), k);
     }
 }
