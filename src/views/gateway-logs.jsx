@@ -84,60 +84,23 @@ function LogBlock({ label, raw, resp }) {
     </div>
   );
 }
-// SSE 事件流拍平：双协议帧形都认（OpenAI chunk 的 choices[].delta、Anthropic 事件的 type+delta）。
-// 相邻内容帧（think/text）聚合拼串成一行带帧数——思考流一帧一个词，逐帧拍平只会刷屏；
-// role/finish/usage/其他控制帧独立成行，usage 双协议字段名都接（含缓存 cr/cw）
-const sseClip = (x) => { const t = String(x); return t.length > 200 ? t.slice(0, 200) + "…" : t; };
+// SSE 流美化：与原文同一帧序列，只把每帧压缩的 data: JSON 展开成多行（帧间空行），
+// event:/[DONE]/非 JSON 行原样保留——就是 SSE 正常格式的可读版，不做任何摘要
 const sseFlat = (s) => {
-  const frames = String(s).split("\n").filter((l) => l.startsWith("data: ")).map((l) => l.slice(6).trim());
   const out = [];
-  let acc = null; // 连续内容帧聚合：{ src, n, think, text }
-  const flush = () => {
-    if (!acc) return;
-    const bits = [];
-    if (acc.think) bits.push(`think:"${sseClip(acc.think)}"`);
-    if (acc.text) bits.push(`text:"${sseClip(acc.text)}"`);
-    out.push(`[${acc.src}×${acc.n}]${bits.length ? " " + bits.join(" | ") : ""}`);
-    acc = null;
-  };
-  for (const d of frames) {
-    if (d === "[DONE]") { flush(); out.push("[done]"); continue; }
-    let v;
-    try { v = JSON.parse(d); } catch { flush(); out.push(`[raw] ${d.slice(0, 120)}`); continue; }
-    const ch = v?.choices?.[0];
-    if (ch && !v.type) {
-      // OpenAI chat chunk：role/finish 是帧边界，内容帧聚合
-      if (ch.finish_reason || ch.delta?.role) {
-        flush();
-        const bits = [];
-        if (ch.delta?.role) bits.push(`role:${ch.delta.role}`);
-        if (ch.finish_reason) bits.push(`finish:${ch.finish_reason}`);
-        out.push(`[chunk] ${bits.join(" | ")}`);
-      } else if (ch.delta?.reasoning_content || ch.delta?.content) {
-        if (!acc) acc = { src: "chunk", n: 0, think: "", text: "" };
-        acc.n++;
-        acc.think += ch.delta.reasoning_content || "";
-        acc.text += ch.delta.content || "";
-      } else flush();
-    } else if (v?.type === "content_block_delta" && (v.delta?.text || v.delta?.thinking)) {
-      // Anthropic 内容 delta：同样聚合（判断要在 flush 之前，否则相邻帧被拆散）
-      if (!acc) acc = { src: "delta", n: 0, think: "", text: "" };
-      acc.n++;
-      acc.think += v.delta.thinking || "";
-      acc.text += v.delta.text || "";
-    } else {
-      flush();
-      const bits = [];
-      if (v?.delta?.text) bits.push(`text:"${sseClip(v.delta.text)}"`);
-      if (v?.delta?.thinking) bits.push(`think:"${sseClip(v.delta.thinking)}"`);
-      if (v?.delta?.stop_reason) bits.push(`stop:${v.delta.stop_reason}`);
-      const u = v?.usage ?? v?.message?.usage;
-      if (u) bits.push(`in:${u.input_tokens ?? u.prompt_tokens ?? 0} out:${u.output_tokens ?? u.completion_tokens ?? 0} cr:${u.cache_read_input_tokens ?? 0} cw:${u.cache_creation_input_tokens ?? 0}`);
-      out.push(`[${v?.type ?? v?.event ?? "?"}]${bits.length ? " " + bits.join(" | ") : ""}`);
+  for (const l of String(s).split("\n")) {
+    const t = l.trimEnd();
+    if (t.startsWith("data: ")) {
+      const d = t.slice(6).trim();
+      if (d !== "[DONE]") {
+        try { out.push("data: " + JSON.stringify(JSON.parse(d), null, 2)); continue; } catch { /* 非 JSON 帧原样 */ }
+      }
+      out.push(t);
+    } else if (t) {
+      out.push(t);
     }
   }
-  flush();
-  return out.join("\n");
+  return out.join("\n\n");
 };
 
 // token 紧凑格式：>=1000 显示 k（一位小数，整 k 去尾），<1000 原样
