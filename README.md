@@ -10,8 +10,10 @@ Tauri 2 桌面工具：在多个 ZCode 账号之间一键切换，自动显示�
 
 - **保存 / 切换账号**：一键切换登录身份；切换前自动保全当前登录，绝不丢号；设备身份跟账号走，远程控制中继密钥跨切换保活
 - **添加账号**：工具内 OAuth 登录新号（BigModel / z.ai 双入口），全程不动当前登录
-- **额度展示**：账号行内联显示套餐额度与重置时间，多套餐分组
+- **额度展示**：账号行内联显示套餐额度与重置时间，多套餐分组；仪表盘页汇总总览
 - **活动领取**：可领套餐一键领取；「自动领取」开关（默认关）定时自动检测并领取，手动操作优先
+- **本地网关**：OpenAI 兼容反代，把任意 OpenAI SDK 的请求翻译成 ZCode 模型端点协议（`http://127.0.0.1:8081/v1`）；多账号池轮询 + 冷却、请求日志（原文/JSON/正文/SSE 多格式查看）、网关配置调优弹窗、测试请求面板；详见 [docs/GATEWAY.md](docs/GATEWAY.md)
+- **邀请计划**：绑定邀请码、我的邀请码与分享链接（复制完整链接）、邀请任务进度一览
 - **加密导入导出**：`.zsb` 捆绑包，PBKDF2(600k) + AES-256-GCM 口令加密
 - **中英双语**：设置里一键切换 中文 / English，主窗、托盘、错误提示、CLI 输出全覆盖；首次运行按系统语言自动选择
 - **托盘 / 开机自启 / CLI 自动化**
@@ -38,6 +40,8 @@ zcode-switch.exe --cli export --id <id> --out <a.zsb>
 zcode-switch.exe --cli export-all --out <all.zsb>
 zcode-switch.exe --cli import --file <file.zsb>
 zcode-switch.exe --cli rename|delete|update|behavior|setpath|launch
+zcode-switch.exe --cli gateway status               # 网关配置 + 端口监听探测（启停在 GUI）
+zcode-switch.exe --cli gateway logs [--n 条数]      # 读 gateway.jsonl 尾部请求日志
 zcode-switch.exe --cli --lang en state              # 英文输出（--lang 空格传值、可置于任意位置；默认跟 GUI 语言/系统语言）
 ```
 
@@ -53,6 +57,7 @@ CLI 密码（export / import）：优先环境变量 `ZSW_PASSWORD`（不出现�
 ## 开发文档
 
 - [客户端版本头策略](docs/APP-VERSION.md)——全部通道跟随本机 ZCode 版本（注册表探测）；billing 链版本不敏感（2026-10-31 实测 3.17.1 连续 12 号 claim 零 3012），marketing/touch 必须真实版本（老版本头回空投放）
+- [网关设计文档](docs/GATEWAY.md)——协议矩阵、多号池、模块分解与里程碑
 
 ## 构建
 

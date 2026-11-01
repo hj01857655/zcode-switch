@@ -73,23 +73,15 @@ src-tauri/src/gateway/
 
 依赖新增：`axum`（或 tiny-http + 手路由）、`tokio`（Tauri 已带）、`reqwest` stream。IPC 命令：`gateway_start` / `gateway_stop` / `gateway_status`，配置落 `~/.zcode-switch/gateway.json`（端口、sk-… 密钥）。
 
-## 4b. 前端设计（已落骨架：`views/gateway.jsx`，commit `2183856`）
+## 4b. 前端设计（现状：`views/gateway.jsx` + `views/gateway-logs.jsx`，均已落地）
 
-控制面板复用关于页的居中卡片视觉（`.about-card.gateway-card`），自上而下四段：
+网关页（`gateway.jsx`）自上而下：
 
-1. **品牌行**：`Gateway` 大字 mono + 状态徽标（`已停止` 灰 / `运行中` mint 绿，随状态轮询变色）；菜单名 zh「网关」/ en「Gateway」（App.jsx 曾存在的双渲染块已修）
-2. **端点说明块**：一句话说明 OpenAI 兼容形态与上游调用方式
-3. **配置表单 ×2**：端口输入（默认 8081）、API 密钥输入（调用方鉴权），各带保存按钮——当前 disabled，接 `gateway_status` 后按「配置与运行态一致才可改」的规则启用
-4. **启停按钮行**：`启动服务` / `停止服务` 互斥 disabled（运行中只亮停止），接 `gateway_start/stop`
-
-**待接状态设计**（M1 接线时的完整面板）：
-
-- `gateway_status` 轮询（1s）：`running / port / uptime / requests_total / errors_total / active_accounts`
-- 状态灯三态扩展：`starting`（琥珀）/ `running`（mint）/ `error`（red，附最近错误）
-- 新增**请求日志块**（最近 N 条：时间、端点、账号、状态码、耗时），由 `gateway_status` 附带最近事件环
-- 多号池可视化：每号一行（名称 + 状态点 + 今日请求数 + 冷却剩余秒），数据从 pool 状态取
-- 保存按钮启用规则：表单值 ≠ 持久值且服务未运行时才可点；运行中改配置需先停止（避免热改端口/密钥的不一致窗口）
-- 样式约束：沿用 panel/hairline/amber/mint 主题变量，不新增配色；表单行复用 `.path-line`；全部文案走 `x.*` i18n 键（zh/en 同步）
+1. **品牌行**：`Gateway` 大字 mono + 状态徽标（`已停止` 灰 / `运行中` mint 绿）；`gateway_status` 1s 轮询（running/port/uptime/requests_total/errors_total/pool）
+2. **端点块**：Base URL（一键复制）+ API 密钥（打码显示 + 复制），多账号池概览（每号名称 + 状态点 + 今日请求数 + 冷却剩余秒）
+3. **操作行**：启动/停止互斥按钮、`配置` 调优弹窗（tuneOpen 内联：端口/密钥/池参数/冷却参数，未运行才可改）、`测试请求` 弹窗（pv-panel：模型下拉 + 消息输入 + 结果面板）
+4. **请求日志**：独立日志页 `views/gateway-logs.jsx`（网关页 `打开日志` 入口）；表格列 = 时间/模型/账号/状态/耗时，行展开为 LogBlock 单一实现，响应侧支持原文/JSON/正文/SSE（sseFlat 拍平）四种格式切换；日志落盘开关在日志页
+- 样式：Tailwind v4（`src/tailwind.css` `@theme`）+ 主题变量；文案全部 `x.*` i18n 键（zh/en 同步，`yarn check:i18n` 门禁）
 
 ## 5. 里程碑（每步可独立验证）
 
@@ -99,7 +91,7 @@ src-tauri/src/gateway/
 | M2 | Anthropic messages 非流式：直通 + 前缀注入，真实出话 | ✅ 已验（Python 同构 200 出话） |
 | M3 | OpenAI chat/completions 非流式 + 流式 SSE | ✅ 已验（多轮出 "5"、流式 42 chunk 出 "收到"） |
 | M4 | /v1/responses + /v1/messages SSE 透传 + pool.rs 多号农场 | ✅ 已落（编译绿；/v1/chat/completions 已整链验收，messages 直通与 responses 未经 axum 整链实测） |
-| M5 | 面板请求日志/池可视化接线（pool 状态 → twoapi_status 扩展） | 未开工 |
+| M5 | 面板请求日志/池可视化/调优与测试弹窗/独立日志页 | ✅ 已落（`gateway.jsx` + `gateway-logs.jsx`；vite build 绿） |
 
 ## 6. 风险与前置
 
