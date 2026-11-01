@@ -659,6 +659,9 @@ export const actions = {
       return;
     }
     autoToggleBusy = true;
+    // 乐观翻转：开关即时到位，落盘/对齐在后台跑（set_behavior 可能排队等 STORE_LOCK）
+    store.state.auto_claim = next;
+    emit();
     try {
       await invoke("set_behavior", { autoClaim: next });
       await refresh();
@@ -669,8 +672,11 @@ export const actions = {
       } else {
         lastAutoRound = null;
       }
-    } catch (e) { toast(stripErr(e), "err"); }
-    finally { autoToggleBusy = false; }
+    } catch (e) {
+      store.state.auto_claim = !next;
+      emit();
+      toast(stripErr(e), "err");
+    } finally { autoToggleBusy = false; }
   },
 };
 

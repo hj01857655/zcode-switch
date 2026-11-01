@@ -1581,7 +1581,7 @@ input:focus-visible,
   display: flex;
   flex-direction: column;
   gap: 2px;
-  max-height: 320px;
+  max-height: 560px;
   overflow-y: auto;
   background: var(--bg-2);
   border: 1px solid var(--hairline-soft);
@@ -1591,7 +1591,7 @@ input:focus-visible,
 .x-log-head,
 .x-log-row {
   display: grid;
-  grid-template-columns: 72px 1fr 96px 110px 48px 96px 72px 44px;
+  grid-template-columns: 72px 1fr 96px 110px 48px 96px 72px 44px 44px;
   gap: 10px;
   align-items: center;
   font-family: var(--mono);
@@ -1614,7 +1614,7 @@ input:focus-visible,
 .x-log-acct { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .x-log-model, .x-log-ms { color: var(--ink-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .x-log-ms { text-align: right; }
-.x-log-tok, .x-log-cache { color: var(--ink-mute); text-align: center; font-variant-numeric: tabular-nums; }
+.x-log-tok, .x-log-cache, .x-log-stream { color: var(--ink-mute); text-align: center; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .x-log-code { text-align: right; }
 .x-log-code.ok { color: var(--mint); }
 .x-log-code.fail { color: var(--red); }
@@ -1658,7 +1658,7 @@ input:focus-visible,
 /* 行展开时左栏收窄给详情：行与详情左右并排，不再竖排追加 */
 .x-log-item.expanded { grid-template-columns: 46% minmax(0, 1fr); align-items: start; }
 .x-log-item.expanded .x-log-row { min-width: 0; }
-.x-log-item.expanded .x-log-detail { margin: 2px 0 4px 10px; min-width: 0; }
+.x-log-item.expanded .x-log-detail { grid-column: 2; margin: 2px 0 4px 10px; min-width: 0; }
 .x-log-item.expanded .x-log-detail .x-log-pre { max-height: 220px; }
 /* 详情内部：请求/响应左右并排 */
 .x-log-blocks { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
@@ -1676,11 +1676,42 @@ input:focus-visible,
 .x-log-kv { display: grid; grid-template-columns: auto 1fr auto 1fr; gap: 3px 14px; }
 .x-log-k { color: var(--ink-mute); }
 .x-log-err { margin-top: 6px; padding: 4px 8px; border-left: 2px solid var(--red); }
-.x-ls-stats { display: flex; gap: 10px; flex-wrap: wrap; }
+/* 统计条：两组卡片（请求计数 / token 汇总），网格对齐不随窗口换行错位 */
+.x-ls-stats {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.x-ls-group {
+  display: flex;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 10px;
+  align-items: stretch;
+}
+/* 内层格子不再自带底色/圆角：外层卡片是唯一容器，避免四角顶成直角 */
+.x-ls-group .x-stat {
+  background: none;
+  border-radius: 0;
+  padding: 2px 10px;
+}
+.x-ls-group-label {
+  display: flex;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .14em;
+  color: var(--ink-mute);
+  padding-right: 10px;
+  border-right: 1px solid var(--hairline-soft);
+}
 .x-stat {
   display: flex; flex-direction: column;
+  gap: 2px;
   min-width: 64px;
-  padding: 6px 12px;
+  padding: 4px 10px;
   border-radius: 8px;
   background: color-mix(in srgb, var(--ink) 4%, transparent);
 }

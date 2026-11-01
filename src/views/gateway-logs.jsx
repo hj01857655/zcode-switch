@@ -111,6 +111,7 @@ function LogRow({ l }) {
         <span className={"x-log-ms" + msTier(l.ms)}>{l.ms != null ? `${l.ms}ms` : "—"}</span>
         <span className="x-log-tok" title={`${t("x.tokOut")} ${l.tout ?? 0} · ${t("x.tokIn")} ${l.tin ?? 0}`}>{(!l.tin && !l.tout) ? "—" : `${fmtTok(l.tout || 0)}↑/${fmtTok(l.tin || 0)}↓`}</span>
         <span className="x-log-cache" title={`${t("x.tokCacheR")} ${l.tcr ?? 0} · ${t("x.tokCacheW")} ${l.tcw ?? 0}`}>{(l.tcr || l.tcw) ? `${fmtTok(l.tcr || 0)}+${fmtTok(l.tcw || 0)}` : "—"}</span>
+        <span className="x-log-stream">{l.stream != null ? (l.stream ? t("x.stream") : t("x.nonStream")) : "—"}</span>
         <span className={"x-log-code " + (l.ok ? stTier(l.status) : " bad")}>
           <span className="x-log-dot" />{l.status}
         </span>
@@ -154,7 +155,21 @@ export default function GatewayLogsPage() {
   const [err, setErr] = useState("");
   const [epFilter, setEpFilter] = useState("");
   const [okFilter, setOkFilter] = useState(""); // "" | "ok" | "fail"
-  const [auto, setAuto] = useState(false);
+  // 自由搜索：端点/账号/模型三字段模糊匹配
+  const [q, setQ] = useState("");
+  // 相对时间保鲜：30s 一次强制重渲染，让「N 秒前」不僵死
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((x) => x + 1), 30000);
+    return () => clearInterval(id);
+  }, []);
+  // 自动刷新偏好持久化：localStorage（与主题同模式），进页面恢复上次的开关状态
+  const [auto, setAuto] = useState(() => localStorage.getItem("zcs-gwlog-auto") === "1");
+  const toggleAuto = () => {
+    const next = !auto;
+    setAuto(next);
+    localStorage.setItem("zcs-gwlog-auto", next ? "1" : "0");
+  };
   // 日志落盘开关：真值从网关状态读，切换走 gateway_start 的部分更新（只传 logToDisk）
   const [logDisk, setLogDisk] = useState(null);
   useEffect(() => {
@@ -185,16 +200,29 @@ export default function GatewayLogsPage() {
     if (epFilter) v = v.filter((l) => l.ep === epFilter);
     if (okFilter === "ok") v = v.filter((l) => l.ok);
     if (okFilter === "fail") v = v.filter((l) => !l.ok);
+    const needle = q.trim().toLowerCase();
+    if (needle) v = v.filter((l) => `${l.ep} ${l.account ?? ""} ${l.model ?? ""}`.toLowerCase().includes(needle));
     return v;
-  }, [logs, epFilter, okFilter]);
+  }, [logs, epFilter, okFilter, q]);
 
   const stats = useMemo(() => {
     const v = filtered;
     const ok = v.filter((l) => l.ok).length;
     const mss = v.map((l) => l.ms).filter((x) => typeof x === "number").sort((a, b) => a - b);
     const p95 = mss.length ? mss[Math.min(mss.length - 1, Math.floor(mss.length * 0.95))] : null;
-    return { total: v.length, ok, fail: v.length - ok, p95 };
+    const sum = (k) => v.reduce((a, l) => a + (l[k] || 0), 0);
+    return { total: v.length, ok, fail: v.length - ok, p95, tin: sum("tin"), tout: sum("tout"), tcache: sum("tcr") + sum("tcw") };
   }, [filtered]);
+
+  // 导出当前筛选结果为 JSON 文件
+  const exportLogs = () => {
+    const blob = new Blob([JSON.stringify(filtered, null, 2)], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `gateway-logs-${new Date().toISOString().slice(0, 19).replaceAll(":", "")}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
 
   return (
     <>
@@ -204,7 +232,7 @@ export default function GatewayLogsPage() {
       <section className="toolbar">
         <button className="btn-ghost has-ic" onClick={reload}><Ic name="refresh" size={15} /> {t("xl.reload")}</button>
         <button className={"tog-inline" + (auto ? " on" : "")} role="switch" aria-checked={auto}
-          onClick={() => setAuto(!auto)}>
+          onClick={toggleAuto}>
           <span className={"toggle" + (auto ? " on" : "")} aria-hidden="true"><span className="knob" /></span>
           {t("xl.autoRefresh")}
         </button>
@@ -213,19 +241,31 @@ export default function GatewayLogsPage() {
           <span className={"toggle" + (logDisk ? " on" : "")} aria-hidden="true"><span className="knob" /></span>
           {t("x.tuneLogDisk")}
         </button>
+        <button className="btn-ghost has-ic" onClick={exportLogs}><Ic name="exportAll" size={15} /> {t("xl.export")}</button>
         <span className="tb-spacer" />
       </section>
       <section className="settings open">
         <div className="x-ls-stats">
-          <div className="x-stat"><span className="x-stat-v">{stats.total}</span><span className="x-stat-k">{t("xl.total")}</span></div>
-          <div className="x-stat"><span className="x-stat-v ok">{stats.ok}</span><span className="x-stat-k">{t("xl.ok")}</span></div>
-          <div className="x-stat"><span className="x-stat-v fail">{stats.fail}</span><span className="x-stat-k">{t("xl.fail")}</span></div>
-          {stats.p95 != null
-            ? <div className="x-stat"><span className="x-stat-v">{stats.p95}<small>ms</small></span><span className="x-stat-k">p95</span></div>
-            : null}
+          <div className="x-ls-group">
+            <span className="x-ls-group-label">{t("xl.groupReq")}</span>
+            <div className="x-stat"><span className="x-stat-v">{stats.total}</span><span className="x-stat-k">{t("xl.total")}</span></div>
+            <div className="x-stat"><span className="x-stat-v ok">{stats.ok}</span><span className="x-stat-k">{t("xl.ok")}</span></div>
+            <div className="x-stat"><span className="x-stat-v fail">{stats.fail}</span><span className="x-stat-k">{t("xl.fail")}</span></div>
+            {stats.p95 != null
+              ? <div className="x-stat"><span className="x-stat-v">{stats.p95}<small>ms</small></span><span className="x-stat-k">p95</span></div>
+              : null}
+          </div>
+          <div className="x-ls-group">
+            <span className="x-ls-group-label">{t("xl.groupTok")}</span>
+            <div className="x-stat"><span className="x-stat-v">{fmtTok(stats.tin)}<small>↓</small></span><span className="x-stat-k">{t("x.tokIn")}</span></div>
+            <div className="x-stat"><span className="x-stat-v">{fmtTok(stats.tout)}<small>↑</small></span><span className="x-stat-k">{t("x.tokOut")}</span></div>
+            <div className="x-stat"><span className="x-stat-v">{fmtTok(stats.tcache)}<small>⚡</small></span><span className="x-stat-k">{t("x.tokCache")}</span></div>
+          </div>
         </div>
 
         <div className="x-ls-filters">
+          <input className="zcode-path x-ls-search" type="text" value={q}
+            onChange={(e) => setQ(e.target.value)} placeholder={t("xl.searchPh")} />
           <select className="zcode-path" value={epFilter} onChange={(e) => setEpFilter(e.target.value)}>
             <option value="">{t("xl.allEps")}</option>
             {eps.map((e) => <option key={e} value={e}>{e}</option>)}
@@ -249,9 +289,10 @@ export default function GatewayLogsPage() {
                   <span>{t("x.logColMs")}</span>
                   <span>{t("x.logColTok")}</span>
                   <span>{t("x.logColCache")}</span>
+                  <span>{t("x.logColStream")}</span>
                   <span>{t("x.logColCode")}</span>
                 </div>
-                {filtered.slice().reverse().map((l, i) => <LogRow key={i} l={l} />)}
+                {filtered.slice().reverse().map((l) => <LogRow key={`${l.ts}|${l.ep}|${l.account}`} l={l} />)}
               </div>
             : <div className="x-log-empty">
                 <Ic name="empty" size={18} />

@@ -119,6 +119,7 @@ function LogRow({ l }) {
         <span className={"x-log-ms" + msTier(l.ms)}>{l.ms != null ? `${l.ms}ms` : "—"}</span>
         <span className="x-log-tok" title={`${t("x.tokOut")} ${l.tout ?? 0} · ${t("x.tokIn")} ${l.tin ?? 0}`}>{(!l.tin && !l.tout) ? "—" : `${fmtTok(l.tout || 0)}↑/${fmtTok(l.tin || 0)}↓`}</span>
         <span className="x-log-cache" title={`${t("x.tokCacheR")} ${l.tcr ?? 0} · ${t("x.tokCacheW")} ${l.tcw ?? 0}`}>{(l.tcr || l.tcw) ? `${fmtTok(l.tcr || 0)}+${fmtTok(l.tcw || 0)}` : "—"}</span>
+        <span className="x-log-stream">{l.stream != null ? (l.stream ? t("x.stream") : t("x.nonStream")) : "—"}</span>
         <span className={"x-log-code " + (l.ok ? stTier(l.status) : " bad")}>
           <span className="x-log-dot" />{l.status}
         </span>
@@ -424,6 +425,7 @@ export default function GatewayPage({ onOpenLogs }) {
                     <span>{t("x.logColMs")}</span>
                     <span>{t("x.logColTok")}</span>
                     <span>{t("x.logColCache")}</span>
+                    <span>{t("x.logColStream")}</span>
                     <span>{t("x.logColCode")}</span>
                   </div>
                   {status.logs.slice(-8).reverse().map((l, i) => (

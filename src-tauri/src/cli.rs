@@ -324,6 +324,38 @@ pub fn run(args: &[String]) -> (String, i32) {
                 Err(e) => return (err(&e), 1),
             }
         }
+        // 网关 server 活在 GUI 进程里，CLI 只读：status 探测端口监听，logs 读 jsonl 尾部
+        "gateway" => match rest.first().map(|s| s.as_str()) {
+            Some("status") => {
+                let cfg = crate::gateway::config::GatewayConfig::load();
+                let addr = format!("127.0.0.1:{}", cfg.port);
+                let parsed: Result<std::net::SocketAddr, _> = addr.parse();
+                let Some(sa) = parsed.ok() else {
+                    return (err(&format!("bad addr {addr}")), 1);
+                };
+                let listening = std::net::TcpStream::connect_timeout(
+                    &sa,
+                    std::time::Duration::from_millis(800),
+                )
+                .is_ok();
+                ok(json!({
+                    "running": listening,
+                    "port": cfg.port,
+                    "autoStart": cfg.auto_start,
+                    "sticky": cfg.sticky,
+                    "logToDisk": cfg.log_to_disk,
+                    "logFileMaxMb": cfg.log_file_max_mb,
+                }))
+            }
+            Some("logs") => {
+                let n: usize = flag(rest, "--n").and_then(|v| v.parse().ok()).unwrap_or(20);
+                let mut logs = crate::gateway::GatewayShared::load_log_file();
+                let total = logs.len();
+                let skip = total.saturating_sub(n);
+                ok(json!({ "total": total, "entries": logs.drain(skip..).collect::<Vec<_>>() }))
+            }
+            _ => return (err(&crate::i18n::tr("cli.usage.gateway")), 2),
+        },
         other => return (err(&crate::i18n::trf("cli.unknown_cmd", &[("cmd", other)])), 2),
     };
     (out, 0)
