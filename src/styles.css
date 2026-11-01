@@ -1955,6 +1955,43 @@ button:focus:not(:focus-visible) { outline: none; }
 
 .dash-card { transition: border-color .15s ease; }
 .dash-card:hover { border-color: var(--hairline); }
+.dash-card.clickable { cursor: pointer; }
+.dash-card.clickable:hover { border-color: var(--mint); }
+/* 仪表盘网关运行区：标题行 + 池摘要 + 今日聚合（聚合格子复用日志页 x-ls-stats） */
+.dash-gw {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 14px 16px;
+  background: var(--bg-2);
+  border: 1px solid var(--hairline-soft);
+  border-radius: 10px;
+}
+.dash-gw-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.dash-gw-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.dash-gw-port { color: var(--ink-mute); font-size: 12px; }
+.dash-gw-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--ink-dim);
+}
+.dash-gw-row .warn { color: var(--red); }
 .dash-row { transition: background .12s ease; }
 .dash-row:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
 

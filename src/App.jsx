@@ -389,7 +389,7 @@ export default function App() {
         ) : null}
         {view === "dashboard" ? (
           <div className="settings-view">
-            <DashboardPage />
+            <DashboardPage onNavigate={setView} />
           </div>
         ) : null}
         {settingsLoaded ? (

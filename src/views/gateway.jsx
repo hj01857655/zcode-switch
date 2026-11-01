@@ -26,7 +26,7 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   // 测试请求弹窗：选模型、填消息、发真请求、看结果；历史留痕可回看
   const [testOpen, setTestOpen] = useState(false);
   const [testProto, setTestProto] = useState("openai");
-  const [accProto, setAccProto] = useState("openai");
+  const [accProto, setAccProto] = useState("chat");
   const [copiedEx, setCopiedEx] = useState(false);
   const [testBody, setTestBody] = useState("");
   const [testShowCode, setTestShowCode] = useState(false);
@@ -105,6 +105,24 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
     return () => clearInterval(timer);
   }, []);
   useEffect(() => { tuneOpenRef.current = tuneOpen; }, [tuneOpen]);
+  // 协议 tab 左右邻居切换（Alt+←/→，循环）：测试弹窗开着切弹窗的 Chat/Responses/Messages，否则切调用示例的
+  useEffect(() => {
+    const onKey = (e) => {
+      if (!e.altKey || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+      e.preventDefault();
+      const step = e.key === "ArrowRight" ? 1 : -1;
+      if (testOpen) {
+        const order = ["openai", "responses", "anthropic"];
+        setTestProto(order[(order.indexOf(testProto) + step + order.length) % order.length]);
+        setTestBody("");
+      } else {
+        const order = ["chat", "responses", "messages"];
+        setAccProto(order[(order.indexOf(accProto) + step + order.length) % order.length]);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [testOpen, testProto, accProto]);
 
   const running = status?.running ?? false;
   // 端点输入解析出的端口与盘上不一致 = 待保存；解析失败不给保存
@@ -295,28 +313,25 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
     (testProto === "anthropic" ? `  -H "anthropic-version: 2023-06-01" \\\n` : "") +
     `  -H "Content-Type: application/json" \\\n` +
     `  -d '${JSON.stringify(testBodyParsed).replace(/'/g, "'\\''")}'`;
-  // 接入示例随协议切换：真实端点 + 真实 key + 盘上真实模型名（key 缺省才落占位符）
+  // 调用示例随 tab 切换：Chat（/chat/completions）/ Responses（/responses）/ Messages（/messages），真实端点 + 真实 key + 真实模型名
   const modelShown = (status?.models?.length ? status.models : ["GLM-5.3-Flash"])[0];
   const keyShown = status?.apiKey || "<API_KEY>";
-  const accessCurls =
-    accProto === "anthropic"
-      ? [`curl ${endpoint}/messages \\\n` +
+  const accessCurl =
+    accProto === "responses"
+      ? `curl ${endpoint}/responses \\\n` +
+        `  -H "Authorization: Bearer ${keyShown}" \\\n` +
+        `  -H "Content-Type: application/json" \\\n` +
+        `  -d '{"model":"${modelShown}","input":"hi","max_output_tokens":256}'`
+      : accProto === "messages"
+        ? `curl ${endpoint}/messages \\\n` +
           `  -H "Authorization: Bearer ${keyShown}" \\\n` +
           `  -H "anthropic-version: 2023-06-01" \\\n` +
           `  -H "Content-Type: application/json" \\\n` +
-          `  -d '{"model":"${modelShown}","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'`]
-      : accProto === "models"
-        ? [`curl ${endpoint}/models \\\n` +
-          `  -H "Authorization: Bearer ${keyShown}"`]
-        // OpenAI 一档并列两种协议：Chat Completions 与 Responses
-        : [`curl ${endpoint}/chat/completions \\\n` +
-            `  -H "Authorization: Bearer ${keyShown}" \\\n` +
-            `  -H "Content-Type: application/json" \\\n` +
-            `  -d '{"model":"${modelShown}","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'`,
-          `curl ${endpoint}/responses \\\n` +
-            `  -H "Authorization: Bearer ${keyShown}" \\\n` +
-            `  -H "Content-Type: application/json" \\\n` +
-            `  -d '{"model":"${modelShown}","input":"hi","max_output_tokens":256}'`];
+          `  -d '{"model":"${modelShown}","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'`
+        : `curl ${endpoint}/chat/completions \\\n` +
+          `  -H "Authorization: Bearer ${keyShown}" \\\n` +
+          `  -H "Content-Type: application/json" \\\n` +
+          `  -d '{"model":"${modelShown}","max_tokens":256,"messages":[{"role":"user","content":"hi"}]}'`;
   const copyExample = async () => {
     try { await navigator.clipboard.writeText(accessCurl); setCopiedEx(true); setTimeout(() => setCopiedEx(false), 1200); } catch { /* noop */ }
   };
@@ -420,22 +435,11 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
           <div className="gw-col">
             <label>{t("x.exampleLabel")}</label>
             <div className="lang-seg x-proto-seg" style={{ marginBottom: 8 }}>
-              <button className={"lang-opt" + (accProto === "openai" ? " on" : "")} onClick={() => setAccProto("openai")}>OpenAI</button>
-              <button className={"lang-opt" + (accProto === "anthropic" ? " on" : "")} onClick={() => setAccProto("anthropic")}>Anthropic</button>
-              <button className={"lang-opt" + (accProto === "models" ? " on" : "")} onClick={() => setAccProto("models")}>Models</button>
+              <button className={"lang-opt" + (accProto === "chat" ? " on" : "")} onClick={() => setAccProto("chat")}>Chat</button>
+              <button className={"lang-opt" + (accProto === "responses" ? " on" : "")} onClick={() => setAccProto("responses")}>Responses</button>
+              <button className={"lang-opt" + (accProto === "messages" ? " on" : "")} onClick={() => setAccProto("messages")}>Messages</button>
             </div>
-            {accProto === "openai" ? (
-              <div className="x-curl-grid">
-                <div>
-                  <div className="x-curl-cap">POST /v1/chat/completions</div>
-                  <pre className="x-curl">{accessCurls[0]}</pre>
-                </div>
-                <div>
-                  <div className="x-curl-cap">POST /v1/responses</div>
-                  <pre className="x-curl">{accessCurls[1]}</pre>
-                </div>
-              </div>
-            ) : accessCurls.map((c) => <pre key={c.slice(0, 40)} className="x-curl">{c}</pre>)}
+            <pre className="x-curl">{accessCurl}</pre>
             <button className="btn-ghost" onClick={copyExample}>{copiedEx ? t("x.copied") : t("x.copyBtn")}</button>
             <div className="hint">{t("x.endpointDesc")}</div>
             {err ? <div className="hint" style={{ color: "var(--red)" }}>{err}</div> : null}
@@ -537,9 +541,9 @@ export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
               <div className="pv-sub">{t("x.testHint")}</div>
               <label className="x-test-label">{t("x.testProto")}</label>
               <div className="lang-seg x-proto-seg">
-                <button className={"lang-opt" + (testProto === "openai" ? " on" : "")} onClick={() => { setTestProto("openai"); setTestBody(""); }}>OpenAI</button>
-                <button className={"lang-opt" + (testProto === "anthropic" ? " on" : "")} onClick={() => { setTestProto("anthropic"); setTestBody(""); }}>Anthropic</button>
+                <button className={"lang-opt" + (testProto === "openai" ? " on" : "")} onClick={() => { setTestProto("openai"); setTestBody(""); }}>Chat</button>
                 <button className={"lang-opt" + (testProto === "responses" ? " on" : "")} onClick={() => { setTestProto("responses"); setTestBody(""); }}>Responses</button>
+                <button className={"lang-opt" + (testProto === "anthropic" ? " on" : "")} onClick={() => { setTestProto("anthropic"); setTestBody(""); }}>Messages</button>
               </div>
               <label className="x-test-label">{t("x.testBodyLabel")}</label>
               <textarea className="zcode-path x-test-msg x-test-body" value={testBody || defaultTestBody()}
