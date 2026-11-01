@@ -516,6 +516,29 @@ fn extract_finish(resp: Option<&String>) -> String {
     String::new()
 }
 
+/// 模型定价表（USD / 百万 tokens，按 z.ai 国际站牌价 docs.z.ai/guides/overview/pricing，2026-11 核对）。
+/// 缓存写（tcw）当前不参与计费，故无 cache_write 价。模型名不匹配 → cost 为 null（不计价）
+fn unit_price(model: &str) -> Option<(f64, f64, f64)> {
+    let m = model.to_ascii_lowercase();
+    if m.contains("flashx") {
+        Some((0.37, 1.25, 0.075)) // GLM-5.3-FlashX
+    } else if m.contains("flash") {
+        Some((0.15, 0.50, 0.03)) // GLM-5.3-Flash
+    } else if m.contains("5.3") || m.contains("5.2") {
+        Some((1.4, 4.4, 0.26)) // GLM-5.3 / 5.2 旗舰
+    } else {
+        None
+    }
+}
+
+/// 等值折算成本（USD）：tin×输入 + tout×输出 + tcr×缓存读；tcw 当前不计费。
+/// 这是「按国际站公开牌价折算」的参考值，实际走套餐额度不产生按量扣费
+fn compute_cost(model: &str, tin: i64, tout: i64, tcr: i64) -> Option<f64> {
+    let (pin, pout, pcache) = unit_price(model)?;
+    let m = 1_000_000f64;
+    Some((tin as f64 * pin + tout as f64 * pout + tcr as f64 * pcache) / m)
+}
+
 fn push_ok_log(
     shared: &super::GatewayShared,
     ep: &str,
@@ -532,6 +555,7 @@ fn push_ok_log(
 ) {
     let (tin, tout, tcr, tcw) = extract_usage(resp.as_ref());
     let finish = extract_finish(resp.as_ref());
+    let cost = compute_cost(model, tin, tout, tcr);
     shared.push_log(json!({
         "ts": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         "ep": ep, "account": account, "status": 200, "ok": true,
@@ -539,6 +563,7 @@ fn push_ok_log(
         "ms": ms, "ttft": ttft_ms, "attempt": attempt,
         "req_id": req_id,
         "tin": tin, "tout": tout, "tcr": tcr, "tcw": tcw,
+        "cost": cost,
         "finish": if finish.is_empty() { serde_json::Value::Null } else { serde_json::json!(finish) },
         "ua": if ua.is_empty() { serde_json::Value::Null } else { serde_json::json!(ua) },
         "req": req,

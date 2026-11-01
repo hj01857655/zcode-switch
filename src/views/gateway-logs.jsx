@@ -105,6 +105,13 @@ const sseFlat = (s) => {
 
 // token 紧凑格式：>=1000 显示 k（一位小数，整 k 去尾），<1000 原样
 const fmtTok = (n) => (n >= 1000 ? (n % 1000 === 0 ? `${n / 1000}k` : `${(n / 1000).toFixed(1)}k`) : String(n));
+// 成本紧凑格式（USD）：>=1 显示 2 位小数，>=0.01 保留 3 位，更小用科学计数省位；null/0 显示 $0
+const fmtCost = (n) => {
+  if (!n) return "$0";
+  if (n >= 1) return `$${n.toFixed(2)}`;
+  if (n >= 0.01) return `$${n.toFixed(3)}`;
+  return `$${n.toExponential(1)}`;
+};
 
 function LogRow({ l }) {
   const [open, setOpen] = useState(false);
@@ -153,6 +160,7 @@ function LogRow({ l }) {
               {l.attempt != null && l.attempt > 0 ? <><span className="x-log-k">{t("x.logAttempt")}</span><span className="x-log-v">{l.attempt + 1}</span></> : null}
               {l.finish ? <><span className="x-log-k">{t("x.logFinish")}</span><span className="x-log-v" title={t("x.logFinishTip")}>{l.finish}</span></> : null}
               {l.ua ? <><span className="x-log-k">UA</span><span className="x-log-v" title={l.ua}>{l.ua}</span></> : null}
+              {typeof l.cost === "number" ? <><span className="x-log-k">{t("xl.cost")}</span><span className="x-log-v" title="USD · z.ai 国际站牌价折算">{fmtCost(l.cost)}</span></> : null}
               <span className="x-log-k">{t("x.logColCode")}</span><span className={"x-log-v " + (l.ok ? "ok" : "fail")}>{l.status}{l.req_id ? <small style={{ marginLeft: 6, color: "var(--ink-mute)" }}>{l.req_id.slice(0, 8)}</small> : null}</span>
             </div>
             {l.err ? <div className="x-log-err">{l.err}</div> : null}
@@ -239,6 +247,7 @@ export default function GatewayLogsPage() {
       msP50: pct(mss, 0.5), msP95: pct(mss, 0.95),
       ttftP50: pct(ttfts, 0.5), ttftP95: pct(ttfts, 0.95),
       tin: sum("tin"), tout: sum("tout"), tcache: sum("tcr") + sum("tcw"),
+      cost: v.reduce((a, l) => a + (typeof l.cost === "number" ? l.cost : 0), 0),
     };
   }, [filtered]);
 
@@ -326,6 +335,7 @@ export default function GatewayLogsPage() {
             <div className="x-stat"><span className="x-stat-v">{fmtTok(stats.tin)}<small>↓</small></span><span className="x-stat-k">{t("x.tokIn")}</span></div>
             <div className="x-stat"><span className="x-stat-v">{fmtTok(stats.tout)}<small>↑</small></span><span className="x-stat-k">{t("x.tokOut")}</span></div>
             <div className="x-stat"><span className="x-stat-v">{fmtTok(stats.tcache)}<small>⚡</small></span><span className="x-stat-k">{t("x.tokCache")}</span></div>
+            <div className="x-stat"><span className="x-stat-v">{fmtCost(stats.cost)}<small>$</small></span><span className="x-stat-k">{t("xl.cost")}</span></div>
           </div>
         </div>
 
