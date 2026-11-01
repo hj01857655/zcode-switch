@@ -103,6 +103,9 @@ export const zh = {
 
   "d.menu": "仪表盘",
   "d.accCount": "账号总数",
+  "d.accSection": "账号与额度",
+  "d.quotaTotal": "总额度",
+  "d.updatedAt": "更新于 {time}",
   "d.claimable": "可领取",
   "d.claimableN": "{n} 个账号",
   "d.claimableNone": "暂无可领取",

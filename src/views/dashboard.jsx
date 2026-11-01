@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { t } from "../lib/i18n.js";
 import { Ic } from "../components/iconsx.jsx";
 import { store, subscribe, getVersion, accountName } from "../lib/store.js";
-import { expireInfo, tierBadges } from "../lib/quotaView.js";
+import { expireInfo, tierBadges, slotRows, windowLabel, itemKind, balLabel, fmtTokens } from "../lib/quotaView.js";
 import { TierBadges } from "../components/QuotaView.jsx";
 
 function useStore() {
@@ -31,10 +31,64 @@ function Card({ label, value, cls, ic, onClick }) {
 // token 紧凑格式：>=1000 显示 k（一位小数，整 k 去尾），<1000 原样
 const fmtTok = (n) => (n >= 1000 ? (n % 1000 === 0 ? `${n / 1000}k` : `${(n / 1000).toFixed(1)}k`) : String(n));
 
+// 统一取条目：多套餐取各自 items；套餐无条目但直接挂 total/remaining 的池级兜底形态
+// （quota.rs 无 slots 路径）合成伪条目参与聚合
+function planItems(data) {
+  const plans = data?.plans || [];
+  if (plans.length) {
+    return plans.flatMap((p) => {
+      if ((p.items || []).length) return p.items;
+      if (p.total != null || p.remaining != null) {
+        return [{ name: p.name || p.tier || "plan", total: p.total, remaining: p.remaining, percent_used: p.percent_used }];
+      }
+      return [];
+    });
+  }
+  return data?.items || [];
+}
+
+// 行内额度摘录：合并各 plan 同名窗口取已用最大者，窗口条优先于池条，最多 2 个
+function quotaChips(data) {
+  if (!data) return [];
+  const { wins, pools } = slotRows(planItems(data));
+  const byLabel = new Map();
+  for (const it of [...wins, ...pools]) {
+    const l = itemKind(it) === "raw" ? balLabel(it.name) : windowLabel(it);
+    const cur = byLabel.get(l);
+    if (!cur || (it.percent_used || 0) > (cur.percent_used || 0)) byLabel.set(l, it);
+  }
+  return [...byLabel.values()].slice(0, 2).map((it) => ({ label: windowLabel(it), pct: it.percent_used }));
+}
+
+// 全账号额度聚合：同名窗口/池的 remaining/total 跨账号加总（仅累计带数值的条目），窗口条优先，最多 3 项
+function quotaTotals(accounts) {
+  const byLabel = new Map();
+  const put = (l, it) => {
+    if (it.total == null && it.remaining == null) return;
+    const cur = byLabel.get(l) || { rem: 0, tot: 0 };
+    cur.rem += it.remaining || 0;
+    cur.tot += it.total || 0;
+    byLabel.set(l, cur);
+  };
+  for (const a of accounts) {
+    const data = store.acctQuota[a.id]?.data;
+    if (!data) continue;
+    const { wins, pools } = slotRows(planItems(data));
+    // 时长窗口（分钟）没有可加总的语义，且 fmtTokens 会把分钟排成 K/M 误导，排除
+    for (const it of wins) if (itemKind(it) !== "duration") put(windowLabel(it), it);
+    for (const it of pools) put(balLabel(it.name), it);
+  }
+  return [...byLabel.entries()]
+    .filter(([, v]) => v.rem > 0 || v.tot > 0)
+    .slice(0, 3)
+    .map(([label, v]) => ({ label, rem: v.rem, tot: v.tot }));
+}
+
 export default function DashboardPage({ onNavigate }) {
   useStore();
   const [gw, setGw] = useState(null);
   const [logs, setLogs] = useState(null);
+  const [stamp, setStamp] = useState(null);
 
   // gateway_status 5s 轮询：挂载拉一次会陈旧（网关在别页启停）
   useEffect(() => {
@@ -53,7 +107,7 @@ export default function DashboardPage({ onNavigate }) {
     if (!gwOn) { setLogs(null); return; }
     let alive = true;
     const pull = () => invoke("gateway_log_history")
-      .then((v) => { if (alive) setLogs(v || []); })
+      .then((v) => { if (alive) { setLogs(v || []); setStamp(new Date()); } })
       .catch(() => {});
     pull();
     const id = setInterval(pull, 30000);
@@ -87,6 +141,7 @@ export default function DashboardPage({ onNavigate }) {
   const members = pool?.members ?? [];
   const cooling = members.filter((m) => m.cooldown_secs > 0).length;
   const inflight = members.reduce((a, m) => a + (m.inflight || 0), 0);
+  const totals = quotaTotals(accounts);
 
   return (
     <div className="settings">
@@ -107,6 +162,7 @@ export default function DashboardPage({ onNavigate }) {
           value={<><Ic name="power" size={14} /> {s.zcode_running ? t("d.zcodeRun") : t("d.zcodeStop")}</>}
           cls={s.zcode_running ? "ok" : "dim"}
           ic="play"
+          onClick={() => onNavigate?.("accounts")}
         />
         <Card
           label={t("d.gateway")}
@@ -140,6 +196,7 @@ export default function DashboardPage({ onNavigate }) {
                 {pool?.global_backoff_secs > 0
                   ? <span className="warn">{t("x.globalBackoff")} {pool.global_backoff_secs}s</span>
                   : null}
+                {stamp ? <span className="dash-stamp">{t("d.updatedAt", { time: stamp.toLocaleTimeString([], { hour12: false }) })}</span> : null}
               </div>
               {logs
                 ? <div className="x-ls-stats">
@@ -173,6 +230,21 @@ export default function DashboardPage({ onNavigate }) {
           : null}
       </div>
 
+      <div className="dash-sub">
+        <Ic name="list" size={13} /> {t("d.accSection")}
+        {accounts.length
+          ? <span className="dash-sub-total">
+              <span className="dash-sub-total-label">{t("d.quotaTotal")}</span>
+              {totals.length
+                ? totals.map((v) => (
+                    <span key={v.label} className="dash-q">
+                      {v.label} <b>{fmtTokens(v.rem)}/{fmtTokens(v.tot)}</b>
+                    </span>
+                  ))
+                : <span className="dash-q dash-q-pending">…</span>}
+            </span>
+          : null}
+      </div>
       <div className="dash-list">
         {accounts.map((a) => {
           const q = store.acctQuota[a.id]?.data;
@@ -181,6 +253,15 @@ export default function DashboardPage({ onNavigate }) {
             <div key={a.id} className={"dash-row" + (a.is_active ? " active" : "")}>
               <span className="dash-row-name" title={a.id}>{a.name}</span>
               <TierBadges pairs={tierBadges(q)} />
+              <div className="dash-row-quota">
+                {quotaChips(q).map((c, i) => (
+                  <span key={i} className="dash-q">
+                    {c.label} <b className={c.pct >= 90 ? "danger" : c.pct >= 70 ? "warn" : ""}>
+                      {c.pct == null ? "--" : Math.round(c.pct) + "%"}
+                    </b>
+                  </span>
+                ))}
+              </div>
               <span className="dash-row-meta">
                 {exp ? t("q.validUntil", { date: exp.text }) : t("q.unknown")}
               </span>

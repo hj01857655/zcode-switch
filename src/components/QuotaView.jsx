@@ -122,7 +122,8 @@ export function AccountQuotaSlot({ id, quota, plan, claimDisabled, onClaim }) {
     inner = <span className="aq-err">{msg}</span>;
   } else if (quota?.data) {
     const plans = quota.data.plans || [];
-    if (plans.length >= 2) {
+    if (plans.length >= 1) {
+      // 单套餐也带头：档位徽章 + 套餐名 + 有效期（此前单套餐只渲染条目，看不到套餐名）
       inner = <>{plans.map((p, i) => <PlanGroup key={i} plan={p} />)}</>;
     } else {
       const items = quota.data.items || [];

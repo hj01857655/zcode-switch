@@ -103,6 +103,9 @@ export const en = {
 
   "d.menu": "Dashboard",
   "d.accCount": "Accounts",
+  "d.accSection": "Accounts & quota",
+  "d.quotaTotal": "Total quota",
+  "d.updatedAt": "Updated {time}",
   "d.claimable": "Claimable",
   "d.claimableN": "{n} accounts",
   "d.claimableNone": "Nothing to claim",
