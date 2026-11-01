@@ -1566,6 +1566,19 @@ input:focus-visible,
   font-family: var(--mono);
 }
 .x-pool-tag.warn { color: var(--amber); }
+.x-pool-tag.bad { color: var(--red); }
+/* 池卡片自滃滚动上限 + 折叠计数行 */
+.x-pool { max-height: 340px; overflow-y: auto; }
+.x-pool-more { cursor: pointer; color: var(--ink-mute); font-size: 11px; padding: 4px 0; }
+.x-pool-more:hover { color: var(--ink); }
+/* 池行号名可点击（跳账号管理定位）+ 账号卡定位闪灯 */
+.x-pool-name.link { cursor: pointer; }
+.x-pool-name.link:hover { color: var(--mint); text-decoration: underline; }
+.acc-flash { animation: accFlash 1.6s ease; border-radius: 10px; }
+@keyframes accFlash {
+  0%, 55% { box-shadow: 0 0 0 2px color-mix(in srgb, var(--mint) 60%, transparent); }
+  100% { box-shadow: none; }
+}
 .x-pool-global {
   font-size: 12px;
   color: var(--amber);
@@ -1591,7 +1604,7 @@ input:focus-visible,
 .x-log-head,
 .x-log-row {
   display: grid;
-  grid-template-columns: 18px 72px 1fr 96px 110px 48px 96px 72px 44px 44px;
+  grid-template-columns: 18px 72px 1fr 96px 110px 44px 44px 48px 96px 72px;
   gap: 10px;
   align-items: center;
   font-family: var(--mono);
@@ -2031,7 +2044,36 @@ html[data-theme="light"] {
 }
 .x-test-hist-ms { color: var(--ink-mute); flex: none; }
 .x-test-hist-text { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.x-test-panel { max-width: 540px; }
+.x-test-panel {
+  width: min(640px, calc(100vw - 48px));
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+}
+/* 日志页聚合面板：按账号/模型分组，口径与统计卡一致（成功率/分位数/token 汇总） */
+.x-ls-dimseg { width: auto; }
+.x-ls-dimseg .lang-opt { flex: 1; white-space: nowrap; }
+.x-ls-agg {
+  margin: 0 0 12px;
+  border: 1px solid var(--hairline-soft);
+  border-radius: 8px;
+  padding: 6px 10px;
+  overflow-x: auto;
+}
+.x-ls-agg-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 1.8fr) repeat(8, minmax(52px, 1fr));
+  gap: 4px 10px;
+  align-items: baseline;
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 4px 0;
+}
+.x-ls-agg-row + .x-ls-agg-row { border-top: 1px solid var(--hairline-soft); }
+.x-ls-agg-row.head { color: var(--ink-mute); font-weight: 600; }
+.x-ls-agg-name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.x-ls-agg-v { color: var(--ink-dim); text-align: right; }
+.x-ls-agg-v.ok { color: var(--mint); }
+.x-ls-agg-v.bad { color: var(--red); }
 .x-test-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
 .x-test-close { padding: 1px 10px; font-size: 15px; line-height: 1.4; }
 .x-test-panel label.x-test-label {

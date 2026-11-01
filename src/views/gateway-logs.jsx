@@ -23,25 +23,32 @@ const msTier = (ms) => (ms == null ? "" : ms < 1000 ? "" : ms < 5000 ? " warn" :
 const stTier = (st) => (st >= 500 ? " bad" : st >= 400 ? " warn" : " ok");
 // req/resp 落盘时可能被截断：能解析就美化，不能就原样
 const prettyJson = (s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; } };
-// 正文提取：OpenAI JSON 取 message.content；SSE 逐帧拼 delta；Anthropic 取 content[0].text；都不是就原样
+// 正文提取：只留人读的回答文本。双协议双通道都认：
+// OpenAI（delta.content / message.content / reasoning_content）、Anthropic（delta.text / delta.thinking / content[0].text）。
+// 有思考流时前置思考段（max_tokens 截断场景常见「只有思考没有回答」），空结果回退原样不吞内容
 const fmtText = (s) => {
   if (!s) return "";
   const t0 = String(s).trim();
   if (t0.startsWith("data:") || t0.includes("\ndata:")) {
     let out = "";
+    let think = "";
     for (const line of t0.split("\n")) {
       const d = line.startsWith("data:") ? line.slice(5).trim() : "";
       if (!d || d === "[DONE]") continue;
       try {
         const v = JSON.parse(d);
-        out += v?.choices?.[0]?.delta?.content ?? v?.choices?.[0]?.message?.content ?? v?.delta?.text ?? "";
+        const ch = v?.choices?.[0];
+        out += ch?.delta?.content ?? v?.delta?.text ?? "";
+        think += ch?.delta?.reasoning_content ?? v?.delta?.thinking ?? "";
       } catch { /* 非 JSON 帧跳过 */ }
     }
-    if (out) return out;
+    if (out || think) return (think ? `${t("x.fmtThink")}\n${think}\n\n${t("x.fmtAnswer")}\n` : "") + out;
   }
   try {
     const v = JSON.parse(t0);
-    return v?.choices?.[0]?.message?.content ?? v?.content?.[0]?.text ?? "";
+    const content = v?.choices?.[0]?.message?.content ?? v?.content?.[0]?.text ?? "";
+    const think = v?.choices?.[0]?.message?.reasoning_content ?? "";
+    return (think ? `${t("x.fmtThink")}\n${think}\n\n${t("x.fmtAnswer")}\n` : "") + content;
   } catch { return s; }
 };
 
@@ -77,21 +84,61 @@ function LogBlock({ label, raw, resp }) {
     </div>
   );
 }
-// SSE 事件流拍平：每个 data: 帧一行摘要（event 类型 + 帧内 JSON 关键字段），跳过 ping/心跳
-const sseFlat = (s) => String(s).split("\n").filter((l) => l.startsWith("data: ")).map((l) => {
-  const d = l.slice(6).trim();
-  try {
-    const v = JSON.parse(d);
-    const type = v?.type ?? v?.event ?? "?";
+// SSE 事件流拍平：双协议帧形都认（OpenAI chunk 的 choices[].delta、Anthropic 事件的 type+delta）。
+// 相邻内容帧（think/text）聚合拼串成一行带帧数——思考流一帧一个词，逐帧拍平只会刷屏；
+// role/finish/usage/其他控制帧独立成行，usage 双协议字段名都接（含缓存 cr/cw）
+const sseClip = (x) => { const t = String(x); return t.length > 200 ? t.slice(0, 200) + "…" : t; };
+const sseFlat = (s) => {
+  const frames = String(s).split("\n").filter((l) => l.startsWith("data: ")).map((l) => l.slice(6).trim());
+  const out = [];
+  let acc = null; // 连续内容帧聚合：{ src, n, think, text }
+  const flush = () => {
+    if (!acc) return;
     const bits = [];
-    if (v?.delta?.text) bits.push(`text:${v.delta.text}`);
-    if (v?.delta?.thinking) bits.push(`think:${v.delta.thinking}`);
-    if (v?.delta?.stop_reason) bits.push(`stop:${v.delta.stop_reason}`);
-    const u = v?.usage ?? v?.message?.usage;
-    if (u) bits.push(`in:${u.input_tokens ?? 0} out:${u.output_tokens ?? 0} cr:${u.cache_read_input_tokens ?? 0} cw:${u.cache_creation_input_tokens ?? 0}`);
-    return `[${type}]${bits.length ? " " + bits.join(" | ") : ""}`;
-  } catch { return `[raw] ${d.slice(0, 120)}`; }
-}).join("\n");
+    if (acc.think) bits.push(`think:"${sseClip(acc.think)}"`);
+    if (acc.text) bits.push(`text:"${sseClip(acc.text)}"`);
+    out.push(`[${acc.src}×${acc.n}]${bits.length ? " " + bits.join(" | ") : ""}`);
+    acc = null;
+  };
+  for (const d of frames) {
+    if (d === "[DONE]") { flush(); out.push("[done]"); continue; }
+    let v;
+    try { v = JSON.parse(d); } catch { flush(); out.push(`[raw] ${d.slice(0, 120)}`); continue; }
+    const ch = v?.choices?.[0];
+    if (ch && !v.type) {
+      // OpenAI chat chunk：role/finish 是帧边界，内容帧聚合
+      if (ch.finish_reason || ch.delta?.role) {
+        flush();
+        const bits = [];
+        if (ch.delta?.role) bits.push(`role:${ch.delta.role}`);
+        if (ch.finish_reason) bits.push(`finish:${ch.finish_reason}`);
+        out.push(`[chunk] ${bits.join(" | ")}`);
+      } else if (ch.delta?.reasoning_content || ch.delta?.content) {
+        if (!acc) acc = { src: "chunk", n: 0, think: "", text: "" };
+        acc.n++;
+        acc.think += ch.delta.reasoning_content || "";
+        acc.text += ch.delta.content || "";
+      } else flush();
+    } else if (v?.type === "content_block_delta" && (v.delta?.text || v.delta?.thinking)) {
+      // Anthropic 内容 delta：同样聚合（判断要在 flush 之前，否则相邻帧被拆散）
+      if (!acc) acc = { src: "delta", n: 0, think: "", text: "" };
+      acc.n++;
+      acc.think += v.delta.thinking || "";
+      acc.text += v.delta.text || "";
+    } else {
+      flush();
+      const bits = [];
+      if (v?.delta?.text) bits.push(`text:"${sseClip(v.delta.text)}"`);
+      if (v?.delta?.thinking) bits.push(`think:"${sseClip(v.delta.thinking)}"`);
+      if (v?.delta?.stop_reason) bits.push(`stop:${v.delta.stop_reason}`);
+      const u = v?.usage ?? v?.message?.usage;
+      if (u) bits.push(`in:${u.input_tokens ?? u.prompt_tokens ?? 0} out:${u.output_tokens ?? u.completion_tokens ?? 0} cr:${u.cache_read_input_tokens ?? 0} cw:${u.cache_creation_input_tokens ?? 0}`);
+      out.push(`[${v?.type ?? v?.event ?? "?"}]${bits.length ? " " + bits.join(" | ") : ""}`);
+    }
+  }
+  flush();
+  return out.join("\n");
+};
 
 // token 紧凑格式：>=1000 显示 k（一位小数，整 k 去尾），<1000 原样
 const fmtTok = (n) => (n >= 1000 ? (n % 1000 === 0 ? `${n / 1000}k` : `${(n / 1000).toFixed(1)}k`) : String(n));
@@ -110,13 +157,13 @@ function LogRow({ l }) {
         </span>
         <span className="x-log-acct" title={l.account}>{l.account ?? "—"}</span>
         <span className="x-log-model">{l.model ?? "—"}</span>
-        <span className={"x-log-ms" + msTier(l.ms)} title={l.ttft != null ? `TTFT ${l.ttft}ms` : undefined}>{l.ms != null ? (l.stream && l.ttft != null ? `${l.ttft}/${l.ms}ms` : `${l.ms}ms`) : "—"}</span>
-        <span className="x-log-tok" title={`${t("x.tokOut")} ${l.tout ?? 0} · ${t("x.tokIn")} ${l.tin ?? 0}`}>{(!l.tin && !l.tout) ? "—" : `${fmtTok(l.tout || 0)}↑/${fmtTok(l.tin || 0)}↓`}</span>
-        <span className="x-log-cache" title={`${t("x.tokCacheR")} ${l.tcr ?? 0} · ${t("x.tokCacheW")} ${l.tcw ?? 0}`}>{(l.tcr || l.tcw) ? `${fmtTok(l.tcr || 0)}+${fmtTok(l.tcw || 0)}` : "—"}</span>
         <span className="x-log-stream">{l.stream != null ? (l.stream ? t("x.stream") : t("x.nonStream")) : "—"}</span>
         <span className={"x-log-code " + (l.ok ? stTier(l.status) : " bad")}>
           <span className="x-log-dot" />{l.status}
         </span>
+        <span className={"x-log-ms" + msTier(l.ms)} title={l.ttft != null ? `TTFT ${l.ttft}ms` : undefined}>{l.ms != null ? (l.stream && l.ttft != null ? `${l.ttft}/${l.ms}ms` : `${l.ms}ms`) : "—"}</span>
+        <span className="x-log-tok" title={`${t("x.tokOut")} ${l.tout ?? 0} · ${t("x.tokIn")} ${l.tin ?? 0}`}>{(!l.tin && !l.tout) ? "—" : `${fmtTok(l.tout || 0)}↑/${fmtTok(l.tin || 0)}↓`}</span>
+        <span className="x-log-cache" title={`${t("x.tokCacheR")} ${l.tcr ?? 0} · ${t("x.tokCacheW")} ${l.tcw ?? 0}`}>{(l.tcr || l.tcw) ? `${fmtTok(l.tcr || 0)}+${fmtTok(l.tcw || 0)}` : "—"}</span>
       </div>
       {hasDetail && open
         ? <div className="x-log-detail" onClick={(e) => e.stopPropagation()}>
@@ -128,6 +175,9 @@ function LogRow({ l }) {
                 <span className={"x-tok" + ((l.tcw ?? 0) > 0 ? " hit" : "")}><Ic name="pen" size={11} /> {t("x.tokCacheW")} {l.tcw ?? 0}</span>
                 <span className="x-tok"><Ic name="clock" size={11} /> {l.ms != null ? `${l.ms}ms` : "—"}</span>
                 {l.ttft != null ? <span className="x-tok" title="TTFT">⚡{l.ttft}ms</span> : null}
+                {l.stream && l.tout > 0 && l.ttft != null && l.ms > l.ttft
+                  ? <span className="x-tok hit" title="tokens/s（首帧等待不计入）">{Math.round((l.tout / (l.ms - l.ttft)) * 1000)} tok/s</span>
+                  : null}
               </div>
               <button className="btn-ghost x-log-copy"
                 onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(JSON.stringify(l, null, 2)).catch(() => {}); }}>
@@ -138,6 +188,8 @@ function LogRow({ l }) {
               <span className="x-log-k">{t("x.logColModel")}</span><span className="x-log-v">{l.model ?? "—"}{l.stream != null ? ` · ${t(l.stream ? "x.stream" : "x.nonStream")}` : ""}</span>
               <span className="x-log-k">{t("x.logColAcct")}</span><span className="x-log-v">{l.account ?? "—"}</span>
               {l.attempt != null && l.attempt > 0 ? <><span className="x-log-k">{t("x.logAttempt")}</span><span className="x-log-v">{l.attempt + 1}</span></> : null}
+              {l.finish ? <><span className="x-log-k">{t("x.logFinish")}</span><span className="x-log-v" title={t("x.logFinishTip")}>{l.finish}</span></> : null}
+              {l.ua ? <><span className="x-log-k">UA</span><span className="x-log-v" title={l.ua}>{l.ua}</span></> : null}
               <span className="x-log-k">{t("x.logColCode")}</span><span className={"x-log-v " + (l.ok ? "ok" : "fail")}>{l.status}{l.req_id ? <small style={{ marginLeft: 6, color: "var(--ink-mute)" }}>{l.req_id.slice(0, 8)}</small> : null}</span>
             </div>
             {l.err ? <div className="x-log-err">{l.err}</div> : null}
@@ -158,6 +210,8 @@ export default function GatewayLogsPage() {
   const [err, setErr] = useState("");
   const [epFilter, setEpFilter] = useState("");
   const [okFilter, setOkFilter] = useState(""); // "" | "ok" | "fail"
+  // 聚合维度：按账号（账号级排障：1004/资格类失败谁最集中）/ 按模型
+  const [groupDim, setGroupDim] = useState("account");
   // 自由搜索：端点/账号/模型三字段模糊匹配
   const [q, setQ] = useState("");
   // 相对时间保鲜：30s 一次强制重渲染，让「N 秒前」不僵死
@@ -225,7 +279,28 @@ export default function GatewayLogsPage() {
     };
   }, [filtered]);
 
-  // 导出当前筛选结果为 JSON 文件
+  // 分组聚合：复用当前筛选结果，按维度归组算成功率/分位数/token 汇总，按请求量降序
+  const groups = useMemo(() => {
+    const map = new Map();
+    for (const l of filtered) {
+      const k = l[groupDim] ?? "—";
+      let g = map.get(k);
+      if (!g) { g = { key: k, n: 0, ok: 0, mss: [], ttfts: [], tin: 0, tout: 0, tcache: 0 }; map.set(k, g); }
+      g.n += 1;
+      if (l.ok) g.ok += 1;
+      if (typeof l.ms === "number") g.mss.push(l.ms);
+      if (l.stream && typeof l.ttft === "number") g.ttfts.push(l.ttft);
+      g.tin += l.tin || 0; g.tout += l.tout || 0; g.tcache += (l.tcr || 0) + (l.tcw || 0);
+    }
+    const pct = (arr, q) => (arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * q))] : null);
+    return [...map.values()]
+      .map((g) => {
+        g.mss.sort((a, b) => a - b);
+        g.ttfts.sort((a, b) => a - b);
+        return { ...g, rate: g.n ? Math.round((g.ok / g.n) * 100) : null, p50: pct(g.mss, 0.5), p95: pct(g.mss, 0.95), tp50: pct(g.ttfts, 0.5) };
+      })
+      .sort((a, b) => b.n - a.n);
+  }, [filtered, groupDim]);
   const exportLogs = () => {
     const blob = new Blob([JSON.stringify(filtered, null, 2)], { type: "application/json" });
     const a = document.createElement("a");
@@ -303,7 +378,40 @@ export default function GatewayLogsPage() {
             <option value="ok">{t("xl.ok")}</option>
             <option value="fail">{t("xl.fail")}</option>
           </select>
+          <div className="lang-seg x-ls-dimseg">
+            <button className={"lang-opt" + (groupDim === "account" ? " on" : "")} onClick={() => setGroupDim("account")}>{t("xl.byAccount")}</button>
+            <button className={"lang-opt" + (groupDim === "model" ? " on" : "")} onClick={() => setGroupDim("model")}>{t("xl.byModel")}</button>
+          </div>
         </div>
+
+        {filtered.length
+          ? <div className="x-ls-agg">
+              <div className="x-ls-agg-row head">
+                <span className="x-ls-agg-name">{groupDim === "account" ? t("x.logColAcct") : t("x.logColModel")}</span>
+                <span className="x-ls-agg-v">{t("xl.total")}</span>
+                <span className="x-ls-agg-v">{t("xl.rate")}</span>
+                <span className="x-ls-agg-v" title={t("xl.latTotal")}>p50</span>
+                <span className="x-ls-agg-v" title={t("xl.latTotal")}>p95</span>
+                <span className="x-ls-agg-v" title="Time To First Token (stream, p50)">TTFT p50</span>
+                <span className="x-ls-agg-v">{t("x.tokIn")}</span>
+                <span className="x-ls-agg-v">{t("x.tokOut")}</span>
+                <span className="x-ls-agg-v">{t("x.tokCache")}</span>
+              </div>
+              {groups.map((g) => (
+                <div key={g.key} className="x-ls-agg-row">
+                  <span className="x-ls-agg-name" title={g.key}>{g.key}</span>
+                  <span className="x-ls-agg-v">{g.n}</span>
+                  <span className={"x-ls-agg-v" + (g.rate != null ? (g.rate >= 90 ? " ok" : g.rate < 60 ? " bad" : "") : "")}>{g.rate != null ? `${g.rate}%` : "—"}</span>
+                  <span className="x-ls-agg-v">{g.p50 != null ? `${g.p50}ms` : "—"}</span>
+                  <span className="x-ls-agg-v">{g.p95 != null ? `${g.p95}ms` : "—"}</span>
+                  <span className="x-ls-agg-v">{g.tp50 != null ? `${g.tp50}ms` : "—"}</span>
+                  <span className="x-ls-agg-v">{fmtTok(g.tin)}↓</span>
+                  <span className="x-ls-agg-v">{fmtTok(g.tout)}↑</span>
+                  <span className="x-ls-agg-v">{fmtTok(g.tcache)}⚡</span>
+                </div>
+              ))}
+            </div>
+          : null}
 
         {err
           ? <div className="hint" style={{ color: "var(--red)" }}>{err}</div>
@@ -315,11 +423,11 @@ export default function GatewayLogsPage() {
                   <span>{t("x.logColEp")}</span>
                   <span>{t("x.logColAcct")}</span>
                   <span>{t("x.logColModel")}</span>
+                  <span>{t("x.logColStream")}</span>
+                  <span>{t("x.logColCode")}</span>
                   <span>{t("x.logColMs")}</span>
                   <span>{t("x.logColTok")}</span>
                   <span>{t("x.logColCache")}</span>
-                  <span>{t("x.logColStream")}</span>
-                  <span>{t("x.logColCode")}</span>
                 </div>
                 {filtered.slice().reverse().map((l) => <LogRow key={`${l.ts}|${l.ep}|${l.account}`} l={l} />)}
               </div>

@@ -317,6 +317,8 @@ function EmptyState() {
 export default function App() {
   const s = useStore();
   const listRef = useRef(null);
+  // 池行跳转定位：记住要定位的账号 id，切到账号页后滚动+闪灯
+  const [focusAcc, setFocusAcc] = useState(null);
   const VIEWS = ["dashboard", "accounts", "gateway", "gatewayLogs", "referral", "settings", "about"];
   // 记住上次停留的菜单：localStorage 是 WebView2 持久存储，重启应用恢复
   const [view, setViewRaw] = useState(() => {
@@ -330,6 +332,16 @@ export default function App() {
   // 设置页首次打开后保活，避免每次切换都重跑 get_state 等 IPC 造成卡顿
   const [settingsLoaded, setSettingsLoaded] = useState(false);
   if (view === "settings" && !settingsLoaded) setSettingsLoaded(true);
+  // 定位闪灯：账号卡滚到可视区中心，闪一次边框后清除
+  useEffect(() => {
+    if (!focusAcc || view !== "accounts") return;
+    const el = listRef.current?.querySelector(`[data-acc="${focusAcc}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: "center" });
+    el.classList.add("acc-flash");
+    const timer = setTimeout(() => { el.classList.remove("acc-flash"); setFocusAcc(null); }, 1700);
+    return () => clearTimeout(timer);
+  }, [focusAcc, view]);
 
   useEffect(() => { boot(); }, []);
 
@@ -363,13 +375,14 @@ export default function App() {
             </div>
             <main className="list" ref={listRef}>
               {st.accounts.length === 0 ? <EmptyState /> : st.accounts.map((a) => (
-                <AccountRow
-                  key={a.id}
-                  a={a}
-                  quota={s.acctQuota[a.id]}
-                  plan={s.claimable[a.id]?.plans?.[0] || null}
-                  claimDisabled={claimDisabled}
-                />
+                <div key={a.id} data-acc={a.id}>
+                  <AccountRow
+                    a={a}
+                    quota={s.acctQuota[a.id]}
+                    plan={s.claimable[a.id]?.plans?.[0] || null}
+                    claimDisabled={claimDisabled}
+                  />
+                </div>
               ))}
             </main>
           </>
@@ -391,7 +404,8 @@ export default function App() {
         ) : null}
         {view === "gateway" ? (
           <div className="settings-view">
-            <GatewayPage onOpenLogs={() => setView("gatewayLogs")} />
+            <GatewayPage onOpenLogs={() => setView("gatewayLogs")}
+              onOpenAccount={(id) => { setFocusAcc(id); setView("accounts"); }} />
           </div>
         ) : null}
         {view === "gatewayLogs" ? (

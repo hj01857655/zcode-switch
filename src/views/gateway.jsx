@@ -118,13 +118,13 @@ function LogRow({ l }) {
         </span>
         <span className="x-log-acct" title={l.account}>{l.account ?? "—"}</span>
         <span className="x-log-model">{l.model ?? "—"}</span>
-        <span className={"x-log-ms" + msTier(l.ms)} title={l.ttft != null ? `TTFT ${l.ttft}ms` : undefined}>{l.ms != null ? (l.stream && l.ttft != null ? `${l.ttft}/${l.ms}ms` : `${l.ms}ms`) : "—"}</span>
-        <span className="x-log-tok" title={`${t("x.tokOut")} ${l.tout ?? 0} · ${t("x.tokIn")} ${l.tin ?? 0}`}>{(!l.tin && !l.tout) ? "—" : `${fmtTok(l.tout || 0)}↑/${fmtTok(l.tin || 0)}↓`}</span>
-        <span className="x-log-cache" title={`${t("x.tokCacheR")} ${l.tcr ?? 0} · ${t("x.tokCacheW")} ${l.tcw ?? 0}`}>{(l.tcr || l.tcw) ? `${fmtTok(l.tcr || 0)}+${fmtTok(l.tcw || 0)}` : "—"}</span>
         <span className="x-log-stream">{l.stream != null ? (l.stream ? t("x.stream") : t("x.nonStream")) : "—"}</span>
         <span className={"x-log-code " + (l.ok ? stTier(l.status) : " bad")}>
           <span className="x-log-dot" />{l.status}
         </span>
+        <span className={"x-log-ms" + msTier(l.ms)} title={l.ttft != null ? `TTFT ${l.ttft}ms` : undefined}>{l.ms != null ? (l.stream && l.ttft != null ? `${l.ttft}/${l.ms}ms` : `${l.ms}ms`) : "—"}</span>
+        <span className="x-log-tok" title={`${t("x.tokOut")} ${l.tout ?? 0} · ${t("x.tokIn")} ${l.tin ?? 0}`}>{(!l.tin && !l.tout) ? "—" : `${fmtTok(l.tout || 0)}↑/${fmtTok(l.tin || 0)}↓`}</span>
+        <span className="x-log-cache" title={`${t("x.tokCacheR")} ${l.tcr ?? 0} · ${t("x.tokCacheW")} ${l.tcw ?? 0}`}>{(l.tcr || l.tcw) ? `${fmtTok(l.tcr || 0)}+${fmtTok(l.tcw || 0)}` : "—"}</span>
       </div>
       {hasDetail && open
         ? <div className="x-log-detail" onClick={(e) => e.stopPropagation()}>
@@ -146,6 +146,8 @@ function LogRow({ l }) {
               <span className="x-log-k">{t("x.logColModel")}</span><span className="x-log-v">{l.model ?? "—"}{l.stream != null ? ` · ${t(l.stream ? "x.stream" : "x.nonStream")}` : ""}</span>
               <span className="x-log-k">{t("x.logColAcct")}</span><span className="x-log-v">{l.account ?? "—"}</span>
               {l.attempt != null && l.attempt > 0 ? <><span className="x-log-k">{t("x.logAttempt")}</span><span className="x-log-v">{l.attempt + 1}</span></> : null}
+              {l.finish ? <><span className="x-log-k">{t("x.logFinish")}</span><span className="x-log-v" title={t("x.logFinishTip")}>{l.finish}</span></> : null}
+              {l.ua ? <><span className="x-log-k">UA</span><span className="x-log-v" title={l.ua}>{l.ua}</span></> : null}
               <span className="x-log-k">{t("x.logColCode")}</span><span className={"x-log-v " + (l.ok ? "ok" : "fail")}>{l.status}{l.req_id ? <small style={{ marginLeft: 6, color: "var(--ink-mute)" }}>{l.req_id.slice(0, 8)}</small> : null}</span>
             </div>
             <div className="x-log-blocks">
@@ -161,7 +163,7 @@ function LogRow({ l }) {
   );
 }
 
-export default function GatewayPage({ onOpenLogs }) {
+export default function GatewayPage({ onOpenLogs, onOpenAccount }) {
   const [status, setStatus] = useState(null);
   const [endpointInput, setEndpointInput] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -181,6 +183,7 @@ export default function GatewayPage({ onOpenLogs }) {
   const [testBusy, setTestBusy] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [testHistory, setTestHistory] = useState([]);
+  const testAbort = useRef(null);
   const [connectInput, setConnectInput] = useState("");
   const [retriesInput, setRetriesInput] = useState("");
   const [backoffInput, setBackoffInput] = useState("");
@@ -189,6 +192,11 @@ export default function GatewayPage({ onOpenLogs }) {
   const [logDiskInput, setLogDiskInput] = useState(true);
   const [logMaxInput, setLogMaxInput] = useState("");
   const [stickyInput, setStickyInput] = useState(true);
+  const [failsInput, setFailsInput] = useState("");
+  const [keepaliveInput, setKeepaliveInput] = useState("");
+  const [timeoutInput, setTimeoutInput] = useState("");
+  // 池成员折叠：异常优先展示，正常号超阈值收成计数行，点开全量
+  const [poolExpand, setPoolExpand] = useState(false);
   // 用户是否动过 key/端点输入框：没动过就跟随盘上真值（启动/换号后 key 会变），动过则尊重输入
   const keyTouched = useRef(false);
   const epTouched = useRef(false);
@@ -229,6 +237,9 @@ export default function GatewayPage({ onOpenLogs }) {
       setCorsInput((v) => v || (s?.corsOrigins || []).join(", "));
       setBodyLimitInput((v) => v || String(s?.bodyLimitMb ?? ""));
       setLogMaxInput((v) => v || String(s?.logFileMaxMb ?? ""));
+      setFailsInput((v) => v || String(s?.allowedFails ?? ""));
+      setKeepaliveInput((v) => v || String(s?.keepaliveSecs ?? ""));
+      setTimeoutInput((v) => v || String(s?.totalTimeoutSecs ?? ""));
       if (!tuneOpenRef.current) {
         setLogDiskInput(s?.logToDisk !== false);
         setStickyInput(s?.sticky !== false);
@@ -258,7 +269,10 @@ export default function GatewayPage({ onOpenLogs }) {
     String(status.bodyLimitMb ?? "") !== bodyLimitInput.trim() ||
     status.logToDisk !== logDiskInput ||
     String(status.logFileMaxMb ?? "") !== logMaxInput.trim() ||
-    status.sticky !== stickyInput
+    status.sticky !== stickyInput ||
+    String(status.allowedFails ?? "") !== failsInput.trim() ||
+    String(status.keepaliveSecs ?? "") !== keepaliveInput.trim() ||
+    String(status.totalTimeoutSecs ?? "") !== timeoutInput.trim()
   );
   const guard = async (fn) => {
     if (busy) return;
@@ -305,6 +319,9 @@ export default function GatewayPage({ onOpenLogs }) {
       logToDisk: logDiskInput,
       logFileMaxMb: Number.isFinite(lm) && lm > 0 ? lm : null,
       sticky: stickyInput,
+      allowedFails: Number.isFinite(parseInt(failsInput.trim(), 10)) ? Math.max(0, parseInt(failsInput.trim(), 10)) : null,
+      keepaliveSecs: Number.isFinite(parseInt(keepaliveInput.trim(), 10)) ? Math.max(0, parseInt(keepaliveInput.trim(), 10)) : null,
+      totalTimeoutSecs: Number.isFinite(parseInt(timeoutInput.trim(), 10)) ? Math.max(0, parseInt(timeoutInput.trim(), 10)) : null,
     });
     setTuneOpen(false);
   });
@@ -327,13 +344,18 @@ export default function GatewayPage({ onOpenLogs }) {
   const doTestSend = () => guard(async () => {
     setTestBusy(true);
     setTestResult(null);
+    // 可取消：流式长生成中途能停；AbortError 单独落「已取消」，不进错误 toast
+    testAbort.current?.abort();
+    const ac = new AbortController();
+    testAbort.current = ac;
+    const t0 = Date.now();
     try {
-      const t0 = Date.now();
       const anthropic = testProto === "anthropic";
       const path = anthropic ? "/messages" : "/chat/completions";
       const body = buildTestBody();
       const r = await fetch(`${endpoint}${path}`, {
         method: "POST",
+        signal: ac.signal,
         headers: {
           "Authorization": `Bearer ${apiKey || status?.apiKey || ""}`,
           "Content-Type": "application/json",
@@ -343,6 +365,17 @@ export default function GatewayPage({ onOpenLogs }) {
       });
       let text = "";
       let usage = null;
+      let ttft = null;
+      const pullFrame = (d) => {
+        if (d === "[DONE]") return;
+        try {
+          const v = JSON.parse(d);
+          if (ttft == null) ttft = Date.now() - t0; // 首帧即 TTFT
+          text += (anthropic ? v?.delta?.text : v?.choices?.[0]?.delta?.content) ?? "";
+          // 合并而非覆盖：Anthropic 的 usage 分帧下发（message_start 给 input，message_delta 给 output）
+          usage = { ...(usage || {}), ...(v?.usage || {}) };
+        } catch { /* 非 JSON 帧跳过 */ }
+      };
       if (testStream && r.ok) {
         // 流式：逐帧读 SSE；OpenAI 拼 delta.content，Anthropic 拼 delta.text
         const reader = r.body.getReader();
@@ -355,42 +388,52 @@ export default function GatewayPage({ onOpenLogs }) {
           const lines = buf.split("\n");
           buf = lines.pop() ?? "";
           for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const d = line.slice(6).trim();
-            if (d === "[DONE]") continue;
-            try {
-              const v = JSON.parse(d);
-              text += (anthropic ? v?.delta?.text : v?.choices?.[0]?.delta?.content) ?? "";
-              if (v?.usage) usage = v.usage;
-            } catch { /* 非 JSON 帧跳过 */ }
+            if (line.startsWith("data: ")) pullFrame(line.slice(6).trim());
           }
         }
+        // 收尾 flush：末尾无换行的残留帧也吃掉，不丢结尾
+        if (buf.startsWith("data: ")) pullFrame(buf.slice(6).trim());
       } else {
-        const body = await r.json().catch(() => ({}));
+        const rb = await r.json().catch(() => ({}));
         text = r.ok
           ? (anthropic
-              ? (body?.content?.[0]?.text || JSON.stringify(body).slice(0, 400))
-              : (body?.choices?.[0]?.message?.content || JSON.stringify(body).slice(0, 400)))
-          : (body?.error?.message || JSON.stringify(body).slice(0, 300));
-        usage = body?.usage ?? null;
+              ? (rb?.content?.find?.((b) => b?.type === "text")?.text || JSON.stringify(rb).slice(0, 400))
+              : (rb?.choices?.[0]?.message?.content || JSON.stringify(rb).slice(0, 400)))
+          : (rb?.error?.message || JSON.stringify(rb).slice(0, 300));
+        usage = rb?.usage ?? null;
       }
       const tin = usage?.prompt_tokens ?? usage?.input_tokens ?? null;
       const tout = usage?.completion_tokens ?? usage?.output_tokens ?? null;
-      const res = { ok: r.ok, status: r.status, ms: Date.now() - t0, text: String(text), stream: testStream, proto: testProto, usage, tin, tout };
+      const res = { ok: r.ok, status: r.status, ms: Date.now() - t0, text: String(text), stream: testStream, proto: testProto, ttft, usage, tin, tout };
       setTestResult(res);
       setTestHistory((h) => [res, ...h].slice(0, 5));
+    } catch (e) {
+      if (e?.name === "AbortError") {
+        setTestResult({ ok: false, status: 0, ms: Date.now() - t0, text: t("x.testAborted"), stream: testStream, proto: testProto });
+      } else {
+        throw e;
+      }
     } finally {
       setTestBusy(false);
+      testAbort.current = null;
     }
   });
 
   const endpoint = `http://127.0.0.1:${status?.port ?? 8081}/v1`;
+  // 池排序：熔断 > 冷却 > 在飞 > 正常，异常天然排前；展开后全量渲染，折叠时只留前 12 行
+  const POOL_SHOWN = 12;
+  const poolSorted = useMemo(() => {
+    const ms = status?.pool?.members || [];
+    const rank = (m) => (m.cooldown_secs >= 600 ? 0 : m.cooldown_secs > 0 ? 1 : m.inflight > 0 ? 2 : 3);
+    return [...ms].sort((a, b) => rank(a) - rank(b));
+  }, [status]);
+  const poolShown = poolExpand ? poolSorted : poolSorted.slice(0, POOL_SHOWN);
   const testCurl =
     `curl ${endpoint}${testProto === "anthropic" ? "/messages" : "/chat/completions"} \\\n` +
     `  -H "Authorization: Bearer <API_KEY>" \\\n` +
     (testProto === "anthropic" ? `  -H "anthropic-version: 2023-06-01" \\\n` : "") +
     `  -H "Content-Type: application/json" \\\n` +
-    `  -d '${JSON.stringify(buildTestBody())}'`;
+    `  -d '${JSON.stringify(buildTestBody()).replace(/'/g, "'\\''")}'`;
   const curlSample =
     `curl ${endpoint}/chat/completions \\\n` +
     `  -H "Authorization: Bearer <API_KEY>" \\\n` +
@@ -414,6 +457,7 @@ export default function GatewayPage({ onOpenLogs }) {
           : <button className="btn-primary has-ic" disabled={busy} onClick={doStart}><Ic name="play" size={15} /> {t("x.start")}</button>}
         <button className="btn-ghost has-ic" disabled={busy || !running}
           onClick={() => { setTestModel((v) => v || (status?.models || [])[0] || "GLM-5.3-Flash"); setTestOpen(true); }}><Ic name="capture" size={15} /> {t("x.testBtn")}</button>
+        <button className="btn-ghost has-ic" onClick={() => setTuneOpen(true)}><Ic name="sliders" size={15} /> {t("x.cfgBtn")}</button>
         {onOpenLogs
           ? <button className="btn-ghost has-ic" onClick={onOpenLogs}><Ic name="list" size={15} /> {t("xl.menuLabel")}</button>
           : null}
@@ -428,7 +472,6 @@ export default function GatewayPage({ onOpenLogs }) {
           {portDirty
             ? <button className="btn-ghost" disabled={running || busy} onClick={doSaveBase}>{t("common.save")}</button>
             : null}
-          <button className="btn-ghost" onClick={() => setTuneOpen(true)}>{t("x.cfgBtn")}</button>
         </div>
 
         <label style={{ marginTop: 10 }}>API KEY</label>
@@ -450,16 +493,25 @@ export default function GatewayPage({ onOpenLogs }) {
             <label>{t("x.poolLabel")}</label>
             {status?.pool?.members?.length
               ? <div className="x-pool">
-                  {status.pool.members.map((m) => (
+                  {poolShown.map((m) => (
                     <div className="x-pool-row" key={m.id}>
                       <span className={"x-pool-dot" + (m.cooldown_secs > 0 ? " cool" : m.inflight > 0 ? " busy" : "")} />
-                      <span className="x-pool-name" title={m.id}>{m.name}</span>
+                      <span className={"x-pool-name" + (onOpenAccount ? " link" : "")} title={m.id}
+                        onClick={() => onOpenAccount?.(m.id)}>{m.name}</span>
                       {m.inflight > 0 ? <span className="x-pool-tag">{t("x.inflight")} {m.inflight}</span> : null}
                       {m.cooldown_secs > 0
-                        ? <span className="x-pool-tag warn">{t("x.cooldown")} {m.cooldown_secs}s</span>
+                        ? <span className={"x-pool-tag" + (m.cooldown_secs >= 600 ? " bad" : " warn")}>{m.cooldown_secs >= 600 ? t("x.poolTripped") : t("x.cooldown")} {m.cooldown_secs}s</span>
+                        : null}
+                      {m.ok != null
+                        ? <span className={"x-pool-tag" + ((m.err ?? 0) > 0 ? " warn" : "")}>{t("x.poolHealth", { ok: m.ok, err: m.err ?? 0 })}</span>
                         : null}
                     </div>
                   ))}
+                  {poolSorted.length > POOL_SHOWN
+                    ? <div className="x-pool-more" onClick={() => setPoolExpand(!poolExpand)}>
+                        {poolExpand ? t("xl.poolLess") : t("xl.poolMore", { n: poolSorted.length - POOL_SHOWN })}
+                      </div>
+                    : null}
                   {status.pool.global_backoff_secs > 0
                     ? <div className="x-pool-global warn">{t("x.globalBackoff")} {status.pool.global_backoff_secs}s</div>
                     : null}
@@ -491,11 +543,11 @@ export default function GatewayPage({ onOpenLogs }) {
                     <span>{t("x.logColEp")}</span>
                     <span>{t("x.logColAcct")}</span>
                     <span>{t("x.logColModel")}</span>
+                    <span>{t("x.logColStream")}</span>
+                    <span>{t("x.logColCode")}</span>
                     <span>{t("x.logColMs")}</span>
                     <span>{t("x.logColTok")}</span>
                     <span>{t("x.logColCache")}</span>
-                    <span>{t("x.logColStream")}</span>
-                    <span>{t("x.logColCode")}</span>
                   </div>
                   {status.logs.slice(-8).reverse().map((l, i) => (
                     <LogRow key={i} l={l} />
@@ -542,7 +594,7 @@ export default function GatewayPage({ onOpenLogs }) {
             <div className="pv-panel x-tune-panel" onClick={(e) => e.stopPropagation()}>
               <div className="pv-title">{t("x.cfgTitle")}</div>
               <div className="pv-sub">{t("x.tuneHint")}</div>
-              <label>{t("x.tuneLabel")}</label>
+              <label>{t("x.tuneGroupNet")}</label>
               <div className="x-tune">
                 <div className="x-tune-item">
                   <span className="x-tune-name">{t("x.tuneConnect")}</span>
@@ -560,6 +612,24 @@ export default function GatewayPage({ onOpenLogs }) {
                     onChange={(e) => setBackoffInput(e.target.value)} placeholder="600" />
                 </div>
                 <div className="x-tune-item">
+                  <span className="x-tune-name">{t("x.tuneFails")}</span>
+                  <input className="zcode-path" type="text" inputMode="numeric" value={failsInput}
+                    onChange={(e) => setFailsInput(e.target.value)} placeholder="5" />
+                </div>
+                <div className="x-tune-item">
+                  <span className="x-tune-name">{t("x.tuneKeepalive")}</span>
+                  <input className="zcode-path" type="text" inputMode="numeric" value={keepaliveInput}
+                    onChange={(e) => setKeepaliveInput(e.target.value)} placeholder="15" />
+                </div>
+                <div className="x-tune-item">
+                  <span className="x-tune-name">{t("x.tuneTimeout")}</span>
+                  <input className="zcode-path" type="text" inputMode="numeric" value={timeoutInput}
+                    onChange={(e) => setTimeoutInput(e.target.value)} placeholder="600" />
+                </div>
+              </div>
+              <label style={{ marginTop: 14 }}>{t("x.tuneGroupSrv")}</label>
+              <div className="x-tune">
+                <div className="x-tune-item">
                   <span className="x-tune-name">{t("x.tuneCors")}</span>
                   <input className="zcode-path" type="text" value={corsInput}
                     onChange={(e) => setCorsInput(e.target.value)} placeholder="https://a.example, https://b.example | * 放行全部" />
@@ -574,23 +644,23 @@ export default function GatewayPage({ onOpenLogs }) {
                   <input className="zcode-path" type="text" inputMode="numeric" value={logMaxInput}
                     onChange={(e) => setLogMaxInput(e.target.value)} placeholder="16" />
                 </div>
-                <div className="x-tune-switch">
-                  <div className="x-tune-item">
-                    <span className="x-tune-name">{t("x.tuneLogDisk")}</span>
-                    <button className={"tog-inline" + (logDiskInput ? " on" : "")} role="switch" aria-checked={logDiskInput}
-                      onClick={() => setLogDiskInput(!logDiskInput)}>
-                      <span className={"toggle" + (logDiskInput ? " on" : "")} aria-hidden="true"><span className="knob" /></span>
-                      {logDiskInput ? t("x.tuneLogOn") : t("x.tuneLogOff")}
-                    </button>
-                  </div>
-                  <div className="x-tune-item">
-                    <span className="x-tune-name">{t("x.tuneSticky")}</span>
-                    <button className={"tog-inline" + (stickyInput ? " on" : "")} role="switch" aria-checked={stickyInput}
-                      onClick={() => setStickyInput(!stickyInput)}>
-                      <span className={"toggle" + (stickyInput ? " on" : "")} aria-hidden="true"><span className="knob" /></span>
-                      {stickyInput ? t("x.stickyOn") : t("x.stickyOff")}
-                    </button>
-                  </div>
+              </div>
+              <div className="x-tune-switch">
+                <div className="x-tune-item">
+                  <span className="x-tune-name">{t("x.tuneLogDisk")}</span>
+                  <button className={"tog-inline" + (logDiskInput ? " on" : "")} role="switch" aria-checked={logDiskInput}
+                    onClick={() => setLogDiskInput(!logDiskInput)}>
+                    <span className={"toggle" + (logDiskInput ? " on" : "")} aria-hidden="true"><span className="knob" /></span>
+                    {logDiskInput ? t("x.tuneLogOn") : t("x.tuneLogOff")}
+                  </button>
+                </div>
+                <div className="x-tune-item">
+                  <span className="x-tune-name">{t("x.tuneSticky")}</span>
+                  <button className={"tog-inline" + (stickyInput ? " on" : "")} role="switch" aria-checked={stickyInput}
+                    onClick={() => setStickyInput(!stickyInput)}>
+                    <span className={"toggle" + (stickyInput ? " on" : "")} aria-hidden="true"><span className="knob" /></span>
+                    {stickyInput ? t("x.stickyOn") : t("x.stickyOff")}
+                  </button>
                 </div>
               </div>
               <div className="pv-actions">
@@ -654,9 +724,9 @@ export default function GatewayPage({ onOpenLogs }) {
                 </div>
               </div>
               <div className="pv-actions x-test-actions">
-                <button className="btn-primary" disabled={testBusy || !running} onClick={() => guard(doTestSend)}>
-                  {testBusy ? t("x.testSending") : t("x.testSend")}
-                </button>
+                {testBusy
+                  ? <button className="btn-primary" onClick={() => testAbort.current?.abort()}>{t("x.stop")}</button>
+                  : <button className="btn-primary" disabled={!running} onClick={() => guard(doTestSend)}>{t("x.testSend")}</button>}
                 <button className={"btn-ghost" + (testShowCode ? " x-btn-on" : "")} onClick={() => setTestShowCode(!testShowCode)}>curl</button>
                 <button className="btn-ghost" onClick={() => setTestOpen(false)}>{t("common.cancel")}</button>
               </div>
@@ -669,7 +739,7 @@ export default function GatewayPage({ onOpenLogs }) {
                     <div className={"x-test-out" + (testResult.ok ? "" : " bad")}>
                       <div className="x-test-meta">
                         <span className={"x-test-dot " + (testResult.ok ? "ok" : "bad")} />
-                        HTTP {testResult.status} · {testResult.ms}ms{testResult.stream ? ` · ${t("x.stream")}` : ""}
+                        {testResult.status ? `HTTP ${testResult.status} · ` : ""}{testResult.ms}ms{testResult.stream ? ` · ${t("x.stream")}` : ""}{testResult.ttft != null ? ` · TTFT ${testResult.ttft}ms` : ""}
                         {(testResult.tin != null || testResult.tout != null)
                           ? ` · ${testResult.tout ?? 0}↑ / ${testResult.tin ?? 0}↓`
                           : ""}
@@ -685,7 +755,7 @@ export default function GatewayPage({ onOpenLogs }) {
                       {testHistory.slice(1).map((h, i) => (
                         <div key={i} className="x-test-hist-row">
                           <span className={"x-test-dot " + (h.ok ? "ok" : "bad")} />
-                          <span className="x-test-hist-ms">{h.ms}ms</span>
+                          <span className="x-test-hist-ms">{(h.proto === "anthropic" ? "ANT" : "OAI") + (h.stream ? "·SSE" : "")} · {h.ms}ms</span>
                           <span className="x-test-hist-text">{h.text.slice(0, 60)}</span>
                         </div>
                       ))}
