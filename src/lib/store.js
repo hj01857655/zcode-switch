@@ -45,6 +45,8 @@ let autoToggleBusy = false;
 const SWEEP_PERIOD = 5 * 60 * 1000;
 const SWEEP_JITTER = 0.2;
 const TICK_MS = 8000;
+// 一跳最多并发几个到期账号；后端 get_account_quota 已走 spawn_blocking，不占 runtime 线程
+const SWEEP_BATCH = 4;
 const quotaDue = {};
 let ticking = false;
 
@@ -174,15 +176,21 @@ async function sweepTick() {
   if (ticking) return;
   enrollAccounts();
   const now = Date.now();
-  const due = (store.state?.accounts || []).find(
-    (a) => (quotaDue[a.id] ?? Infinity) <= now && !store.acctQuota[a.id]?.busy && !store.claimable[a.id]?.busy,
-  );
-  if (!due) return;
+  const due = (store.state?.accounts || [])
+    .filter(
+      (a) => (quotaDue[a.id] ?? Infinity) <= now && !store.acctQuota[a.id]?.busy && !store.claimable[a.id]?.busy,
+    )
+    .slice(0, SWEEP_BATCH);
+  if (!due.length) return;
   ticking = true;
-  const dueAt = quotaDue[due.id];
   try {
-    await loadAcctQuota(due.id);
-    if (quotaDue[due.id] === dueAt) scheduleNext(due.id);
+    await Promise.all(
+      due.map(async (a) => {
+        const dueAt = quotaDue[a.id];
+        await loadAcctQuota(a.id);
+        if (quotaDue[a.id] === dueAt) scheduleNext(a.id);
+      }),
+    );
   } finally {
     ticking = false;
   }
