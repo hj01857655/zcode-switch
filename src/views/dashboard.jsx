@@ -238,7 +238,7 @@ export default function DashboardPage({ onNavigate }) {
               {totals.length
                 ? totals.map((v) => (
                     <span key={v.label} className="dash-q">
-                      {v.label} <b>{fmtTokens(v.rem)}/{fmtTokens(v.tot)}</b>
+                      {v.label} <b>{t("q.remainShort")} {fmtTokens(v.rem)}/{fmtTokens(v.tot)}</b>
                     </span>
                   ))
                 : <span className="dash-q dash-q-pending">…</span>}
