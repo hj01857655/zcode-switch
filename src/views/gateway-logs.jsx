@@ -23,6 +23,75 @@ const msTier = (ms) => (ms == null ? "" : ms < 1000 ? "" : ms < 5000 ? " warn" :
 const stTier = (st) => (st >= 500 ? " bad" : st >= 400 ? " warn" : " ok");
 // req/resp 落盘时可能被截断：能解析就美化，不能就原样
 const prettyJson = (s) => { try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; } };
+// 正文提取：OpenAI JSON 取 message.content；SSE 逐帧拼 delta；Anthropic 取 content[0].text；都不是就原样
+const fmtText = (s) => {
+  if (!s) return "";
+  const t0 = String(s).trim();
+  if (t0.startsWith("data:") || t0.includes("\ndata:")) {
+    let out = "";
+    for (const line of t0.split("\n")) {
+      const d = line.startsWith("data:") ? line.slice(5).trim() : "";
+      if (!d || d === "[DONE]") continue;
+      try {
+        const v = JSON.parse(d);
+        out += v?.choices?.[0]?.delta?.content ?? v?.choices?.[0]?.message?.content ?? v?.delta?.text ?? "";
+      } catch { /* 非 JSON 帧跳过 */ }
+    }
+    if (out) return out;
+  }
+  try {
+    const v = JSON.parse(t0);
+    return v?.choices?.[0]?.message?.content ?? v?.content?.[0]?.text ?? "";
+  } catch { return s; }
+};
+
+// 请求/响应块：原文 / JSON / 正文 / SSE 四视图切换（req 无正文档；SSE 档把事件流拆成可读行），复制按钮复制当前视图
+function LogBlock({ label, raw, resp }) {
+  const isJson = useMemo(() => { try { JSON.parse(String(raw).trim()); return true; } catch { return false; } }, [raw]);
+  const isSse = useMemo(() => /^\s*event:|^\s*data: /m.test(String(raw)), [raw]);
+  const [fmt, setFmt] = useState("raw");
+  const opts = [
+    ["raw", t("x.fmtRaw")],
+    ...(isJson ? [["json", "JSON"]] : []),
+    ...(resp ? [["text", t("x.fmtText")]] : []),
+    ...(isSse ? [["sse", t("x.fmtSse")]] : []),
+  ];
+  const view = fmt === "json" ? prettyJson(raw) : fmt === "text" ? fmtText(raw) : fmt === "sse" ? sseFlat(raw) : String(raw);
+  return (
+    <div className="x-log-block">
+      <div className="x-log-block-head">
+        <span>{label}</span>
+        <span className="x-fmt-seg">
+          {opts.map(([k, lab]) => (
+            <button key={k} className={fmt === k ? "on" : ""}
+              onClick={(e) => { e.stopPropagation(); setFmt(k); }}>{lab}</button>
+          ))}
+        </span>
+        <button className="btn-ghost x-log-copy"
+          onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(view).catch(() => {}); }}>
+          {t("x.copyBtn")}
+        </button>
+      </div>
+      <pre className={"x-log-pre" + (fmt === "text" ? " x-log-pre-text" : "")}>{view}</pre>
+    </div>
+  );
+}
+// SSE 事件流拍平：每个 data: 帧一行摘要（event 类型 + 帧内 JSON 关键字段），跳过 ping/心跳
+const sseFlat = (s) => String(s).split("\n").filter((l) => l.startsWith("data: ")).map((l) => {
+  const d = l.slice(6).trim();
+  try {
+    const v = JSON.parse(d);
+    const type = v?.type ?? v?.event ?? "?";
+    const bits = [];
+    if (v?.delta?.text) bits.push(`text:${v.delta.text}`);
+    if (v?.delta?.thinking) bits.push(`think:${v.delta.thinking}`);
+    if (v?.delta?.stop_reason) bits.push(`stop:${v.delta.stop_reason}`);
+    const u = v?.usage ?? v?.message?.usage;
+    if (u) bits.push(`in:${u.input_tokens ?? 0} out:${u.output_tokens ?? 0} cr:${u.cache_read_input_tokens ?? 0} cw:${u.cache_creation_input_tokens ?? 0}`);
+    return `[${type}]${bits.length ? " " + bits.join(" | ") : ""}`;
+  } catch { return `[raw] ${d.slice(0, 120)}`; }
+}).join("\n");
+
 // token 紧凑格式：>=1000 显示 k（一位小数，整 k 去尾），<1000 原样
 const fmtTok = (n) => (n >= 1000 ? (n % 1000 === 0 ? `${n / 1000}k` : `${(n / 1000).toFixed(1)}k`) : String(n));
 
@@ -30,7 +99,7 @@ function LogRow({ l }) {
   const [open, setOpen] = useState(false);
   const hasDetail = l.model != null || l.ms != null || l.err != null || l.attempt != null || l.stream != null;
   return (
-    <>
+    <div className={"x-log-item" + (hasDetail && open ? " expanded" : "")}>
       <div className={"x-log-row" + (hasDetail ? " clickable" : "")} onClick={() => hasDetail && setOpen(!open)}>
         <span className="x-log-ts" title={new Date(l.ts).toLocaleString()}>{relTime(l.ts)}</span>
         <span className="x-log-ep">
@@ -67,22 +136,16 @@ function LogRow({ l }) {
               {l.attempt != null && l.attempt > 0 ? <><span className="x-log-k">{t("x.logAttempt")}</span><span className="x-log-v">{l.attempt + 1}</span></> : null}
               <span className="x-log-k">{t("x.logColCode")}</span><span className={"x-log-v " + (l.ok ? "ok" : "fail")}>{l.status}</span>
             </div>
-            {["req", "resp"].filter((k) => l[k]).map((k) => (
-              <div className="x-log-block" key={k}>
-                <div className="x-log-block-head">
-                  <span>{k === "req" ? t("x.logReq") : t("x.logResp")}</span>
-                  <button className="btn-ghost x-log-copy"
-                    onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(l[k]).catch(() => {}); }}>
-                    {t("x.copyBtn")}
-                  </button>
-                </div>
-                <pre className="x-log-pre">{prettyJson(l[k])}</pre>
-              </div>
-            ))}
             {l.err ? <div className="x-log-err">{l.err}</div> : null}
+            <div className="x-log-blocks">
+            {["req", "resp"].filter((k) => l[k]).map((k) => (
+              <LogBlock key={k} resp={k === "resp"} raw={l[k]}
+                label={k === "req" ? t("x.logReq") : t("x.logResp")} />
+            ))}
+            </div>
           </div>
         : null}
-    </>
+    </div>
   );
 }
 
@@ -92,6 +155,16 @@ export default function GatewayLogsPage() {
   const [epFilter, setEpFilter] = useState("");
   const [okFilter, setOkFilter] = useState(""); // "" | "ok" | "fail"
   const [auto, setAuto] = useState(false);
+  // 日志落盘开关：真值从网关状态读，切换走 gateway_start 的部分更新（只传 logToDisk）
+  const [logDisk, setLogDisk] = useState(null);
+  useEffect(() => {
+    invoke("gateway_status").then((s) => setLogDisk(s?.logToDisk !== false)).catch(() => {});
+  }, []);
+  const toggleLogDisk = () => {
+    const next = !logDisk;
+    setLogDisk(next);
+    invoke("gateway_start", { logToDisk: next }).catch(() => setLogDisk(!next));
+  };
 
   const reload = () => {
     invoke("gateway_log_history")
@@ -130,7 +203,16 @@ export default function GatewayLogsPage() {
       </header>
       <section className="toolbar">
         <button className="btn-ghost has-ic" onClick={reload}><Ic name="refresh" size={15} /> {t("xl.reload")}</button>
-        <button className={"btn-ghost has-ic" + (auto ? " x-btn-on" : "")} onClick={() => setAuto(!auto)}><Ic name="refresh" size={15} /> {t("xl.autoRefresh")}</button>
+        <button className={"tog-inline" + (auto ? " on" : "")} role="switch" aria-checked={auto}
+          onClick={() => setAuto(!auto)}>
+          <span className={"toggle" + (auto ? " on" : "")} aria-hidden="true"><span className="knob" /></span>
+          {t("xl.autoRefresh")}
+        </button>
+        <button className={"tog-inline" + (logDisk ? " on" : "")} role="switch" aria-checked={!!logDisk}
+          disabled={logDisk == null} onClick={toggleLogDisk}>
+          <span className={"toggle" + (logDisk ? " on" : "")} aria-hidden="true"><span className="knob" /></span>
+          {t("x.tuneLogDisk")}
+        </button>
         <span className="tb-spacer" />
       </section>
       <section className="settings open">
