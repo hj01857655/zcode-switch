@@ -20,9 +20,11 @@ Tauri 2 桌面工具：在多个 ZCode 账号之间一键切换，自动显示�
 | 平台 | 文件 |
 |---|---|
 | Windows x64 | `zcode-switch_<版本>_x64-setup.exe`（NSIS 安装向导） |
+| Windows ARM64 | `zcode-switch_<版本>_arm64-setup.exe`（自下一版起提供） |
 | macOS Apple Silicon | `zcode-switch_<版本>_aarch64.dmg` |
 | macOS Intel | `zcode-switch_<版本>_x64.dmg` |
 | Linux amd64 | `.deb`（Debian/Ubuntu）或 `.AppImage`（通用） |
+| Linux arm64 | `.deb`／`.AppImage`（自下一版起提供） |
 
 **系统要求**：Windows 10+；macOS 12+；Ubuntu 22.04 / Debian 12+（AppImage 通用）。Electron 应用首启被 SmartScreen/Gatekeeper 提示时选「仍要运行」——未做代码签名，属正常现象。
 
@@ -34,13 +36,13 @@ Tauri 2 桌面工具：在多个 ZCode 账号之间一键切换，自动显示�
 
 | 安装形态 | 应用内更新 |
 |---|---|
-| Windows `*_x64-setup.exe`（NSIS） | ✅ 支持 |
+| Windows `*_x64-setup.exe`／`*_arm64-setup.exe`（NSIS） | ✅ 支持 |
 | macOS `.dmg` | ✅ 支持（自更新走同版本附带的 `.app.tar.gz`；自下一版发布起 `latest.json` 才登记 macOS，届时 mac 版手动装一次即转入自动更新） |
 | Linux `.AppImage` | ✅ 支持 |
-| Windows `*_portable.exe`（便携版） | ❌ 需手动下载覆盖 |
+| Windows 便携版 `*_*_portable.exe` | ❌ 需手动下载覆盖 |
 | Linux `.deb` | ❌ 需手动更新（`apt` / 重装 deb） |
 
-`latest.json` 登记 Windows NSIS、macOS（`.app.tar.gz`）与 Linux AppImage 三条自更新通道；Windows 便携版与 Linux deb 不在其中，用这两种形态仍需从 Releases 手动取新版。
+`latest.json` 登记 Windows NSIS、macOS（`.app.tar.gz`）与 Linux AppImage 三类自更新通道，各含 x64／ARM64／Apple Silicon 等平台变体；Windows 便携版与 Linux deb 不在其中，用这两种形态仍需从 Releases 手动取新版。
 
 ## 功能
 

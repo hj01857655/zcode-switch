@@ -20,9 +20,11 @@ Grab the installer for your platform from [Releases](https://github.com/hj018576
 | Platform | File |
 |---|---|
 | Windows x64 | `zcode-switch_<ver>_x64-setup.exe` (NSIS installer) |
+| Windows ARM64 | `zcode-switch_<ver>_arm64-setup.exe` (from the next release) |
 | macOS Apple Silicon | `zcode-switch_<ver>_aarch64.dmg` |
 | macOS Intel | `zcode-switch_<ver>_x64.dmg` |
 | Linux amd64 | `.deb` (Debian/Ubuntu) or `.AppImage` (universal) |
+| Linux arm64 | `.deb` / `.AppImage` (from the next release) |
 
 **Requirements**: Windows 10+; macOS 12+; Ubuntu 22.04 / Debian 12+ (AppImage is universal). If SmartScreen / Gatekeeper warns on first launch, choose "Run anyway" — the binaries are not code-signed, which is expected.
 
@@ -34,13 +36,13 @@ Since v1.8.2 the app has built-in updates: it silently checks once after launch 
 
 | Install form | In-app update |
 |---|---|
-| Windows `*_x64-setup.exe` (NSIS) | ✅ Supported |
+| Windows `*_x64-setup.exe` / `*_arm64-setup.exe` (NSIS) | ✅ Supported |
 | macOS `.dmg` | ✅ Supported (self-update uses the `.app.tar.gz` shipped alongside; `latest.json` lists macOS from the next release, so a mac install made before that updates manually once then becomes automatic) |
 | Linux `.AppImage` | ✅ Supported |
-| Windows `*_portable.exe` | ❌ Manual download required |
+| Windows portable `*_*_portable.exe` | ❌ Manual download required |
 | Linux `.deb` | ❌ Manual update (`apt` / reinstall the deb) |
 
-`latest.json` registers three self-update channels — Windows NSIS, macOS (`.app.tar.gz`) and Linux AppImage; the Windows portable exe and Linux deb are not listed — users on those forms must fetch new versions from Releases manually.
+`latest.json` registers the Windows NSIS, macOS (`.app.tar.gz`) and Linux AppImage update channels, each with its x64 / ARM64 / Apple Silicon platform variants; the Windows portable exe and Linux deb are not listed — users on those forms must fetch new versions from Releases manually.
 
 ## Features
 

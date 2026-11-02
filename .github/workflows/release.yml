@@ -6,7 +6,7 @@ on:
 
 jobs:
   build:
-    name: Build & Release (${{ matrix.os }})
+    name: Build & Release (${{ matrix.os }} · ${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
     permissions:
       contents: write
@@ -15,16 +15,33 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Windows x64：NSIS，native runner 默认 target
           - os: windows-latest
             bundles: nsis
+            arch: x64
+          # Windows ARM64：交叉编译（--target），依赖 runner 镜像的 MSVC ARM64 组件；
+          # 单条腿失败不影响其它腿（fail-fast: false）
+          - os: windows-latest
+            bundles: nsis
+            arch: arm64
+            rust_target: aarch64-pc-windows-msvc
+          # macOS Apple Silicon：macos-latest 原生即 arm64；app 产出更新器要的 .app.tar.gz，dmg 仍给用户装
           - os: macos-latest
-            # app 产出更新器要的 .app.tar.gz；dmg 仍给用户下载安装
             bundles: app,dmg
+            arch: aarch64
+          # macOS Intel：强制 x86_64 target
           - os: macos-latest
             bundles: app,dmg
+            arch: x64
             rust_target: x86_64-apple-darwin
+          # Linux amd64：deb + appimage，native
           - os: ubuntu-22.04
             bundles: deb,appimage
+            arch: amd64
+          # Linux arm64：GitHub 原生 ARM runner，apt 依赖与 x64 同名（解析到 arm64 包）
+          - os: ubuntu-24.04-arm
+            bundles: deb,appimage
+            arch: arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -65,9 +82,9 @@ jobs:
 
             ## 下载
 
-            - **Windows**：`*_x64-setup.exe` 安装包（推荐）／`*_portable.exe` 便携版
+            - **Windows**：`*_x64-setup.exe`（x64）／`*_arm64-setup.exe`（ARM64）安装包；`*_portable.exe` 便携版
             - **macOS**：`*_aarch64.dmg`（Apple 芯片）／`*_x64.dmg`（Intel 芯片）
-            - **Linux**：`*.deb`／`*.AppImage`
+            - **Linux**：`*amd64.deb`／`*arm64.deb`／`*.AppImage`
 
             ## 未签名提示
 
@@ -86,21 +103,25 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUST_TARGET: ${{ matrix.rust_target }}
+          ARCH: ${{ matrix.arch }}
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          cp "src-tauri/target/release/zcode-switch.exe" "zcode-switch_${VER}_portable.exe"
-          SETUP=$(ls src-tauri/target/release/bundle/nsis/*-setup.exe | head -1)
-          sha256sum "zcode-switch_${VER}_portable.exe" "$SETUP" | sed 's| .*/| |' > "checksums-Windows-${GITHUB_REF_NAME}.txt"
-          gh release upload "$GITHUB_REF_NAME" "zcode-switch_${VER}_portable.exe" "checksums-Windows-${GITHUB_REF_NAME}.txt" --clobber
+          # 指定 --target 时产物在 target/<triple>/release，native 时在 target/release
+          if [ -n "$RUST_TARGET" ]; then BUILD_DIR="src-tauri/target/$RUST_TARGET/release"; else BUILD_DIR="src-tauri/target/release"; fi
+          cp "$BUILD_DIR/zcode-switch.exe" "zcode-switch_${VER}_${ARCH}_portable.exe"
+          SETUP=$(ls "$BUILD_DIR"/bundle/nsis/*-setup.exe | head -1)
+          sha256sum "zcode-switch_${VER}_${ARCH}_portable.exe" "$SETUP" | sed 's| .*/| |' > "checksums-Windows-${ARCH}-${GITHUB_REF_NAME}.txt"
+          gh release upload "$GITHUB_REF_NAME" "zcode-switch_${VER}_${ARCH}_portable.exe" "checksums-Windows-${ARCH}-${GITHUB_REF_NAME}.txt" --clobber
 
       - name: Upload checksums
         if: runner.os != 'Windows'
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCH: ${{ matrix.arch }}
         run: |
-          TGT="${{ matrix.rust_target }}"
-          [ -n "$TGT" ] || TGT="native"
+          # 用 arch 标签命名：mac 两腿（aarch64/x64）与 linux 两腿（amd64/arm64）互不撞名
           find src-tauri/target -type f \( -name '*.dmg' -o -name '*.deb' -o -name '*.AppImage' \) \
-            | xargs sha256sum | sed 's| .*/| |' > "checksums-${RUNNER_OS}-${TGT}-${GITHUB_REF_NAME}.txt"
-          gh release upload "$GITHUB_REF_NAME" "checksums-${RUNNER_OS}-${TGT}-${GITHUB_REF_NAME}.txt" --clobber
+            | xargs sha256sum | sed 's| .*/| |' > "checksums-${RUNNER_OS}-${ARCH}-${GITHUB_REF_NAME}.txt"
+          gh release upload "$GITHUB_REF_NAME" "checksums-${RUNNER_OS}-${ARCH}-${GITHUB_REF_NAME}.txt" --clobber
