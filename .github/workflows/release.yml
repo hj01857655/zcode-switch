@@ -38,8 +38,9 @@ jobs:
           - os: ubuntu-22.04
             bundles: deb,appimage
             arch: amd64
-          # Linux arm64：GitHub 原生 ARM runner，apt 依赖与 x64 同名（解析到 arm64 包）
-          - os: ubuntu-24.04-arm
+          # Linux arm64：GitHub 原生 ARM runner（仅公开仓库可用），apt 依赖与 x64 同名（解析到 arm64 包）；
+          # 用 22.04 与 amd64 腿对齐 glibc 基线，避免同一 release 两架构最低系统版本不一致
+          - os: ubuntu-22.04-arm
             bundles: deb,appimage
             arch: arm64
 
@@ -50,7 +51,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2
+          # xdg-utils：arm runner 上缺 xdg-open 会让打包失败（tauri-action#1319）
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libfuse2 xdg-utils
 
       - uses: actions/setup-node@v4
         with:
