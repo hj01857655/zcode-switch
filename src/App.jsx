@@ -380,7 +380,7 @@ export default function App() {
         ) : null}
         {view === "dashboard" ? (
           <div className="settings-view">
-            <DashboardPage onNavigate={setView} />
+            <DashboardPage onNavigate={(v, accId) => { if (accId) setFocusAcc(accId); setView(v); }} />
           </div>
         ) : null}
         {settingsLoaded ? (

@@ -104,7 +104,9 @@ export function grantLabel(plan) {
   return (plan.grants || [])[0] || "";
 }
 
-// 槽内条目：window 类按序、raw 池按 total 取最大值去重后降序
+// 槽内条目：window 类按序、raw 池按 total 取最大值去重后降序；
+// 去重键含套餐标签（__plan）：同名去重只针对同套餐内的上游重复行，
+// 跨套餐（如 weekly build 与 start plan）同名池条不互吞
 export function slotRows(items) {
   const list = items || [];
   const isWin = (it) => itemKind(it) !== "raw";
@@ -112,9 +114,56 @@ export function slotRows(items) {
   const best = new Map();
   for (const it of list) {
     if (isWin(it)) continue;
-    const cur = best.get(it.name);
-    if (!cur || (it.total || 0) > (cur.total || 0)) best.set(it.name, it);
+    const key = `${it.name}\u0001${it.__plan ?? ""}`;
+    const cur = best.get(key);
+    if (!cur || (it.total || 0) > (cur.total || 0)) best.set(key, it);
   }
   const pools = [...best.values()].sort((a, b) => (b.total || 0) - (a.total || 0));
   return { wins, pools };
+}
+
+// 统一取条目（多套餐各自 items，每条打套餐标签 __plan）：
+// 套餐无条目但直接挂 total/remaining 的池级兑底形态合成伪条目参与聚合；
+// 套餐标签让同名去重只在同套餐内生效（weekly build 与 start plan 同名池条不互吞）
+export function planItems(data) {
+  const plans = data?.plans || [];
+  if (plans.length) {
+    return plans.flatMap((p, pi) => {
+      const tag = p.name || p.tier || `plan${pi}`;
+      const items = (p.items || []).length
+        ? p.items
+        : (p.total != null || p.remaining != null)
+          ? [{ name: p.name || p.tier || "plan", total: p.total, remaining: p.remaining, percent_used: p.percent_used }]
+          : [];
+      return items.map((it) => ({ ...it, __plan: tag }));
+    });
+  }
+  return (data?.items || []).map((it) => ({ ...it, __plan: "" }));
+}
+
+// 全账号额度聚合：按套餐分行（套餐名做前缀），同套餐跨账号求和。
+// 不跨套餐合并：weekly build 与 start plan 的 tier_code 同为 start，只有套餐自己的
+// plan_id/name 能区分；上限放宽到 6——双套餐各出窗口+池条已 4 行，截太紧又会吞掉排尾套餐
+export function quotaTotals(datas) {
+  const byLabel = new Map();
+  const put = (l, it) => {
+    if (it.total == null && it.remaining == null) return;
+    const cur = byLabel.get(l) || { rem: 0, tot: 0 };
+    cur.rem += it.remaining || 0;
+    cur.tot += it.total || 0;
+    byLabel.set(l, cur);
+  };
+  for (const data of datas) {
+    if (!data) continue;
+    for (const it of planItems(data)) {
+      // 时长窗口（分钟）没有可加总的语义，且 fmtTokens 会把分钟排成 K/M 误导，排除
+      if (itemKind(it) === "duration") continue;
+      const base = itemKind(it) === "raw" ? balLabel(it.name) : windowLabel(it);
+      put(it.__plan ? `${it.__plan} · ${base}` : base, it);
+    }
+  }
+  return [...byLabel.entries()]
+    .filter(([, v]) => v.rem > 0 || v.tot > 0)
+    .slice(0, 6)
+    .map(([label, v]) => ({ label, rem: v.rem, tot: v.tot }));
 }

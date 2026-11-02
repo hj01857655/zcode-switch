@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { t } from "../lib/i18n.js";
 import { Ic } from "../components/iconsx.jsx";
 import { store, subscribe, getVersion, accountName } from "../lib/store.js";
-import { expireInfo, tierBadges, slotRows, windowLabel, itemKind, balLabel, fmtTokens } from "../lib/quotaView.js";
+import { expireInfo, tierBadges, slotRows, windowLabel, itemKind, balLabel, fmtTokens, planItems, quotaTotals } from "../lib/quotaView.js";
 import { TierBadges } from "../components/QuotaView.jsx";
 
 function useStore() {
@@ -32,19 +32,23 @@ function Card({ label, value, cls, ic, onClick }) {
 const fmtTok = (n) => (n >= 1000 ? (n % 1000 === 0 ? `${n / 1000}k` : `${(n / 1000).toFixed(1)}k`) : String(n));
 
 // 统一取条目：多套餐取各自 items；套餐无条目但直接挂 total/remaining 的池级兜底形态
-// （quota.rs 无 slots 路径）合成伪条目参与聚合
+// （quota.rs 无 slots 路径）合成伪条目参与聚合；
+// 每条打上套餐标签 __plan：slotRows 的同名去重只在同一套餐内生效，
+// 否则 weekly build 与 start plan 同名池条跨套餐互吞，只算到一个
 function planItems(data) {
   const plans = data?.plans || [];
   if (plans.length) {
-    return plans.flatMap((p) => {
-      if ((p.items || []).length) return p.items;
-      if (p.total != null || p.remaining != null) {
-        return [{ name: p.name || p.tier || "plan", total: p.total, remaining: p.remaining, percent_used: p.percent_used }];
-      }
-      return [];
+    return plans.flatMap((p, pi) => {
+      const tag = p.name || p.tier || `plan${pi}`;
+      const items = (p.items || []).length
+        ? p.items
+        : (p.total != null || p.remaining != null)
+          ? [{ name: p.name || p.tier || "plan", total: p.total, remaining: p.remaining, percent_used: p.percent_used }]
+          : [];
+      return items.map((it) => ({ ...it, __plan: tag }));
     });
   }
-  return data?.items || [];
+  return (data?.items || []).map((it) => ({ ...it, __plan: "" }));
 }
 
 // 行内额度摘录：合并各 plan 同名窗口取已用最大者，窗口条优先于池条，最多 2 个
@@ -60,7 +64,9 @@ function quotaChips(data) {
   return [...byLabel.values()].slice(0, 2).map((it) => ({ label: windowLabel(it), pct: it.percent_used }));
 }
 
-// 全账号额度聚合：同名窗口/池的 remaining/total 跨账号加总（仅累计带数值的条目），窗口条优先，最多 3 项
+// 全账号额度聚合：按套餐分行（套餐名做前缀），同套餐跨账号求和。
+// 不跨套餐合并：weekly build 与 start plan 的 tier_code 同为 start，档位区分不了，
+// 只有套餐自己的 plan_id/name 能区分（quota.rs 原样透传到 p.name/p.pid），同名条目分属不同套餐时必须分行
 function quotaTotals(accounts) {
   const byLabel = new Map();
   const put = (l, it) => {
@@ -73,14 +79,16 @@ function quotaTotals(accounts) {
   for (const a of accounts) {
     const data = store.acctQuota[a.id]?.data;
     if (!data) continue;
-    const { wins, pools } = slotRows(planItems(data));
-    // 时长窗口（分钟）没有可加总的语义，且 fmtTokens 会把分钟排成 K/M 误导，排除
-    for (const it of wins) if (itemKind(it) !== "duration") put(windowLabel(it), it);
-    for (const it of pools) put(balLabel(it.name), it);
+    for (const it of planItems(data)) {
+      // 时长窗口（分钟）没有可加总的语义，且 fmtTokens 会把分钟排成 K/M 误导，排除
+      if (itemKind(it) === "duration") continue;
+      const base = itemKind(it) === "raw" ? balLabel(it.name) : windowLabel(it);
+      put(it.__plan ? `${it.__plan} · ${base}` : base, it);
+    }
   }
   return [...byLabel.entries()]
     .filter(([, v]) => v.rem > 0 || v.tot > 0)
-    .slice(0, 3)
+    .slice(0, 4)
     .map(([label, v]) => ({ label, rem: v.rem, tot: v.tot }));
 }
 
@@ -141,7 +149,7 @@ export default function DashboardPage({ onNavigate }) {
   const members = pool?.members ?? [];
   const cooling = members.filter((m) => m.cooldown_secs > 0).length;
   const inflight = members.reduce((a, m) => a + (m.inflight || 0), 0);
-  const totals = quotaTotals(accounts);
+  const totals = quotaTotals(accounts.map((a) => store.acctQuota[a.id]?.data).filter(Boolean));
 
   return (
     <div className="settings">
@@ -198,13 +206,17 @@ export default function DashboardPage({ onNavigate }) {
                   : null}
                 {stamp ? <span className="dash-stamp">{t("d.updatedAt", { time: stamp.toLocaleTimeString([], { hour12: false }) })}</span> : null}
               </div>
-              {logs
-                ? <div className="x-ls-stats">
+              {!logs
+                ? <div className="dash-gw-note">{t("d.gwLoading")}</div>
+                : today.n === 0
+                  ? <div className="dash-gw-note">{t("d.gwNoReq")}</div>
+                  : <div className="x-ls-stats">
                     <div className="x-ls-group">
                       <span className="x-ls-group-label">{t("d.gwToday")}</span>
                       <div className="x-stat"><span className="x-stat-v">{today.n}</span><span className="x-stat-k">{t("xl.total")}</span></div>
                       <div className="x-stat"><span className="x-stat-v ok">{today.ok}</span><span className="x-stat-k">{t("xl.ok")}</span></div>
                       <div className="x-stat"><span className="x-stat-v fail">{today.fail}</span><span className="x-stat-k">{t("xl.fail")}</span></div>
+                      <div className="x-stat"><span className="x-stat-v">{Math.round((today.ok / today.n) * 100)}<small>%</small></span><span className="x-stat-k">{t("d.gwOkRate")}</span></div>
                     </div>
                     {today.p95 != null
                       ? <div className="x-ls-group">
@@ -223,9 +235,8 @@ export default function DashboardPage({ onNavigate }) {
                       {today.hitRate != null
                         ? <div className="x-stat"><span className="x-stat-v">{today.hitRate}<small>%</small></span><span className="x-stat-k">{t("d.gwHitRate")}</span></div>
                         : null}
-                    </div>
                   </div>
-                : null}
+                </div>}
             </>
           : null}
       </div>
@@ -250,7 +261,8 @@ export default function DashboardPage({ onNavigate }) {
           const q = store.acctQuota[a.id]?.data;
           const exp = expireInfo(q?.plan_expire, q?.plan_starts);
           return (
-            <div key={a.id} className={"dash-row" + (a.is_active ? " active" : "")}>
+            <div key={a.id} className={"dash-row clickable" + (a.is_active ? " active" : "")}
+              onClick={() => onNavigate?.("accounts", a.id)} role="button" title={t("d.clickHint")}>
               <span className="dash-row-name" title={a.id}>{a.name}</span>
               <TierBadges pairs={tierBadges(q)} />
               <div className="dash-row-quota">

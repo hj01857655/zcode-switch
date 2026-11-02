@@ -2070,6 +2070,19 @@ button:focus:not(:focus-visible) { outline: none; }
 }
 .dash-row { transition: background .12s ease; }
 .dash-row:hover { background: color-mix(in srgb, var(--ink) 3%, transparent); }
+.dash-row.clickable { cursor: pointer; }
+/* 摘要卡右下角跳转示意：悬停浮现，不常驻减压 */
+.dash-card.clickable::after {
+  content: "→";
+  position: absolute;
+  right: 12px; bottom: 10px;
+  color: var(--ink-mute); font-family: var(--mono); font-size: 13px;
+  opacity: 0;
+  transition: opacity .15s ease;
+}
+.dash-card.clickable:hover::after { opacity: .8; }
+/* 网关运行区空态/加载态：日志未到或今日无请求时的一行占位 */
+.dash-gw-note { color: var(--ink-mute); font-size: 12.5px; padding: 6px 0 2px; }
 
 .side-logo { display: flex; align-items: baseline; min-width: 0; }
 
