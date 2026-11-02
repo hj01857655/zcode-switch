@@ -5821,7 +5821,7 @@ dependencies = [
 
 [[package]]
 name = "zcode-switch"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "aes-gcm",
  "axum",
