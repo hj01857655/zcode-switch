@@ -31,25 +31,6 @@ function Card({ label, value, cls, ic, onClick }) {
 // token 紧凑格式：>=1000 显示 k（一位小数，整 k 去尾），<1000 原样
 const fmtTok = (n) => (n >= 1000 ? (n % 1000 === 0 ? `${n / 1000}k` : `${(n / 1000).toFixed(1)}k`) : String(n));
 
-// 统一取条目：多套餐取各自 items；套餐无条目但直接挂 total/remaining 的池级兜底形态
-// （quota.rs 无 slots 路径）合成伪条目参与聚合；
-// 每条打上套餐标签 __plan：slotRows 的同名去重只在同一套餐内生效，
-// 否则 weekly build 与 start plan 同名池条跨套餐互吞，只算到一个
-function planItems(data) {
-  const plans = data?.plans || [];
-  if (plans.length) {
-    return plans.flatMap((p, pi) => {
-      const tag = p.name || p.tier || `plan${pi}`;
-      const items = (p.items || []).length
-        ? p.items
-        : (p.total != null || p.remaining != null)
-          ? [{ name: p.name || p.tier || "plan", total: p.total, remaining: p.remaining, percent_used: p.percent_used }]
-          : [];
-      return items.map((it) => ({ ...it, __plan: tag }));
-    });
-  }
-  return (data?.items || []).map((it) => ({ ...it, __plan: "" }));
-}
 
 // 行内额度摘录：合并各 plan 同名窗口取已用最大者，窗口条优先于池条，最多 2 个
 function quotaChips(data) {
@@ -64,33 +45,6 @@ function quotaChips(data) {
   return [...byLabel.values()].slice(0, 2).map((it) => ({ label: windowLabel(it), pct: it.percent_used }));
 }
 
-// 全账号额度聚合：按套餐分行（套餐名做前缀），同套餐跨账号求和。
-// 不跨套餐合并：weekly build 与 start plan 的 tier_code 同为 start，档位区分不了，
-// 只有套餐自己的 plan_id/name 能区分（quota.rs 原样透传到 p.name/p.pid），同名条目分属不同套餐时必须分行
-function quotaTotals(accounts) {
-  const byLabel = new Map();
-  const put = (l, it) => {
-    if (it.total == null && it.remaining == null) return;
-    const cur = byLabel.get(l) || { rem: 0, tot: 0 };
-    cur.rem += it.remaining || 0;
-    cur.tot += it.total || 0;
-    byLabel.set(l, cur);
-  };
-  for (const a of accounts) {
-    const data = store.acctQuota[a.id]?.data;
-    if (!data) continue;
-    for (const it of planItems(data)) {
-      // 时长窗口（分钟）没有可加总的语义，且 fmtTokens 会把分钟排成 K/M 误导，排除
-      if (itemKind(it) === "duration") continue;
-      const base = itemKind(it) === "raw" ? balLabel(it.name) : windowLabel(it);
-      put(it.__plan ? `${it.__plan} · ${base}` : base, it);
-    }
-  }
-  return [...byLabel.entries()]
-    .filter(([, v]) => v.rem > 0 || v.tot > 0)
-    .slice(0, 6)
-    .map(([label, v]) => ({ label, rem: v.rem, tot: v.tot }));
-}
 
 export default function DashboardPage({ onNavigate }) {
   useStore();
