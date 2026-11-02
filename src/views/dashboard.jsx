@@ -6,7 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { t } from "../lib/i18n.js";
 import { Ic } from "../components/iconsx.jsx";
 import { store, subscribe, getVersion, accountName } from "../lib/store.js";
-import { expireInfo, tierBadges, slotRows, windowLabel, itemKind, balLabel, fmtTokens } from "../lib/quotaView.js";
+import { expireInfo, tierBadges, slotRows, windowLabel, itemKind, balLabel, fmtTokens, planItems, quotaTotals } from "../lib/quotaView.js";
 import { TierBadges } from "../components/QuotaView.jsx";
 
 function useStore() {
