@@ -310,6 +310,7 @@ export default function App() {
   const s = useStore();
   const listRef = useRef(null);
   // 池行跳转定位：记住要定位的账号 id，切到账号页后滚动+闪灯
+  const [focusAcc, setFocusAcc] = useState(null);
   const [accQuery, setAccQuery] = useState("");
   const VIEWS = ["dashboard", "accounts", "gateway", "gatewayLogs", "referral", "settings", "about"];
   // 记住上次停留的菜单：localStorage 是 WebView2 持久存储，重启应用恢复
