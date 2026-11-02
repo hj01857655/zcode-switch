@@ -18,9 +18,10 @@ jobs:
           - os: windows-latest
             bundles: nsis
           - os: macos-latest
-            bundles: dmg
+            # app 产出更新器要的 .app.tar.gz；dmg 仍给用户下载安装
+            bundles: app,dmg
           - os: macos-latest
-            bundles: dmg
+            bundles: app,dmg
             rust_target: x86_64-apple-darwin
           - os: ubuntu-22.04
             bundles: deb,appimage

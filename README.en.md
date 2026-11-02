@@ -26,6 +26,22 @@ Grab the installer for your platform from [Releases](https://github.com/hj018576
 
 **Requirements**: Windows 10+; macOS 12+; Ubuntu 22.04 / Debian 12+ (AppImage is universal). If SmartScreen / Gatekeeper warns on first launch, choose "Run anyway" — the binaries are not code-signed, which is expected.
 
+## Updates
+
+Since v1.8.2 the app has built-in updates: it silently checks once after launch and shows a corner toast when a new version is found; you can also open the About page anytime to check, download and install manually. Update packages are verified with a minisign signature and only official releases are accepted.
+
+**Coverage** (depends on how you installed — note this carefully):
+
+| Install form | In-app update |
+|---|---|
+| Windows `*_x64-setup.exe` (NSIS) | ✅ Supported |
+| macOS `.dmg` | ✅ Supported (self-update uses the `.app.tar.gz` shipped alongside; `latest.json` lists macOS from the next release, so a mac install made before that updates manually once then becomes automatic) |
+| Linux `.AppImage` | ✅ Supported |
+| Windows `*_portable.exe` | ❌ Manual download required |
+| Linux `.deb` | ❌ Manual update (`apt` / reinstall the deb) |
+
+`latest.json` registers three self-update channels — Windows NSIS, macOS (`.app.tar.gz`) and Linux AppImage; the Windows portable exe and Linux deb are not listed — users on those forms must fetch new versions from Releases manually.
+
 ## Features
 
 - **Save / switch accounts**: one-click login switching; the current login is auto-preserved before any switch — accounts are never lost

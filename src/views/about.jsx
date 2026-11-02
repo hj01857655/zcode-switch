@@ -6,6 +6,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { t } from "../lib/i18n.js";
+import { updateErrText } from "../lib/updater.js";
 import { subscribe, getVersion } from "../lib/store.js";
 
 function Feature({ title, desc }) {
@@ -17,7 +18,7 @@ function Feature({ title, desc }) {
   );
 }
 
-// 应用内更新：关于页手动检查（端点 404 在首个签名版本发布前必然出现，故不做进页自动检查）；
+// 应用内更新：关于页手动检查（另有启动后全局静默检查，见 lib/updater.js 与 store.boot）；
 // 发现新版本后下载并安装，Windows 下安装器自行接管重启，relaunch 兜底其余平台
 const UP_IDLE = { st: "idle", ver: "", pct: 0, err: "" };
 
@@ -82,7 +83,8 @@ export default function AboutPage() {
       <span className="about-upd-hint">{t("a.updDownloading")} {up.pct}%</span>
     ) : (
       <>
-        <span className="about-upd-err">{t("a.updFail", { err: up.err })}</span>
+        {/* 展示映射后的短句，原始 Rust 错误挂 title 供排查 */}
+        <span className="about-upd-err" title={up.err}>{t("a.updFail", { err: updateErrText(up.err) })}</span>
         <button type="button" className="btn-ghost" onClick={runCheck}>{t("a.updRetry")}</button>
       </>
     );

@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { toast, openPwModal, openConfirmModal, openProviderModal } from "../components/ui-bus.js";
 import { init, t, lang, localeTag, stripErr, syncLang, patchLang } from "./i18n.js";
+import { silentUpdateCheck } from "./updater.js";
 
 // ---- 订阅机制 ----
 let version = 0;
@@ -32,6 +33,8 @@ let refreshTicker = null;
 
 const AUTO_CLAIM_INTERVAL_MS = 10 * 60 * 1000;
 const AUTO_CLAIM_FIRST_DELAY_MS = 2 * 60 * 1000;
+// 启动后延迟做更新检查：等窗口起来、splash 散去再弹提示，不跟开机首屏抢注意力
+const BOOT_UPDATE_CHECK_MS = 15_000;
 const AUTO_CLAIM_WAIT_MS = 45_000;
 const AUTO_CLAIM_PER_ACCOUNT_CAP = 5;
 const AUTO_CLAIM_ACCT_GAP_MS = 5_000;
@@ -791,6 +794,7 @@ export async function boot() {
       invoke("get_state").then((raw) => { const s = patchLang(raw); store.state = s; if (s?.language) syncLang(s.language); enrollAccounts(); emit(); }).catch(() => {});
     }, 5000);
     setInterval(sweepTick, TICK_MS);
+    setTimeout(silentUpdateCheck, BOOT_UPDATE_CHECK_MS);
     setTimeout(autoClaimTick, AUTO_CLAIM_FIRST_DELAY_MS);
     setInterval(autoClaimTick, AUTO_CLAIM_INTERVAL_MS);
   } catch (e) {
