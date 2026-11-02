@@ -1260,13 +1260,15 @@ fn plan_tier_from_id(plan_id: &str, name: Option<&str>) -> (String, String) {
         ("Pro".into(), "pro".into())
     } else if hay.contains("lite") {
         ("Lite".into(), "lite".into())
-    } else if hay.contains("start") {
-        ("Start Plan".into(), "start".into())
-    } else if ["trial", "taste", "experience", "gift", "weekend", "promo", "activity", "体验"]
+    } else if ["weekend", "referral", "trial", "taste", "experience", "gift", "promo", "activity", "体验"]
         .iter()
         .any(|k| hay.contains(k))
     {
+        // 临时活动桶先于 start 判定：zai 活动桶的 plan_id 恒含 "start-plan"（如 1030-wk），
+        // 放在 start 之后 weekend 分支永不命中
         ("体验".into(), "trial".into())
+    } else if hay.contains("start") {
+        ("Start Plan".into(), "start".into())
     } else {
         (plan_id.to_string(), "other".into())
     }
@@ -1347,6 +1349,26 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
         })
         .unwrap_or_default();
 
+    // 夜间桶标记：entitlements.period == "daily_night" 的计划（referral 夜卡，
+    // 当晚 23:00 → 次晨 09:00），给对应桶条目打 window 标签供 UI 区分于日常额度
+    let night_pids: std::collections::HashSet<String> = balance
+        .get("plans")
+        .and_then(|p| p.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter(|pl| {
+                    pl.get("entitlements")
+                        .and_then(|e| e.as_array())
+                        .map(|es| {
+                            es.iter().any(|e| e.get("period").and_then(|v| v.as_str()) == Some("daily_night"))
+                        })
+                        .unwrap_or(false)
+                })
+                .filter_map(|pl| pl.get("plan_id").and_then(|v| v.as_str()).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+
     let mut loose: Vec<QuotaItem> = vec![];
     let any_pid = balance
         .get("balances")
@@ -1367,6 +1389,10 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
                 .get("remaining_units")
                 .and_then(to_number)
                 .or_else(|| item.get("available_units").and_then(to_number));
+            let bpid = ["plan_id", "planId", "entitlement_id"]
+                .iter()
+                .find_map(|k| item.get(k).and_then(Value::as_str))
+                .unwrap_or("");
             let it = QuotaItem {
                 name: ["show_name", "name", "entitlement_id", "plan_id"]
                     .iter()
@@ -1383,12 +1409,9 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
                 server_percentage: None,
                 unit: item.get("unit_type").or_else(|| item.get("meter")).and_then(Value::as_str).unwrap_or("quota").to_string(),
                 period_end: ["period_end", "expires_at"].iter().find_map(|k| item.get(k).and_then(expiry_field)),
+                window: if night_pids.contains(bpid) { Some("夜间".into()) } else { None },
                 ..Default::default()
             };
-            let bpid = ["plan_id", "planId", "entitlement_id"]
-                .iter()
-                .find_map(|k| item.get(k).and_then(Value::as_str))
-                .unwrap_or("");
             let target = if !bpid.is_empty() {
                 slots.iter_mut().find(|s| s.pid == bpid)
             } else if slots.len() == 1 && !any_pid {
@@ -1493,9 +1516,15 @@ fn normalize_balance(balance_data: &Value) -> QuotaOverview {
             };
         }
     }
+    // 主槽优先：档位高者胜；同档时常驻套餐（非 -wk/referral 临时桶）胜，
+    // 否则服务端把临时桶排前导致头条数字显示转瞬即逝的活动桶
+    let pri_rank = |s: &PlanSlot| {
+        let transient = s.pid.contains("-wk") || s.pid.contains("referral");
+        (tier_rank(s.tier_code.as_deref()), !transient)
+    };
     let mut pri_idx = 0usize;
     for (i, s) in slots.iter().enumerate() {
-        if tier_rank(s.tier_code.as_deref()) > tier_rank(slots[pri_idx].tier_code.as_deref()) {
+        if pri_rank(s) > pri_rank(&slots[pri_idx]) {
             pri_idx = i;
         }
     }

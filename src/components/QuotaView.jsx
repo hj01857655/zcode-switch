@@ -47,7 +47,7 @@ function BalRow({ it }) {
     : "";
   return (
     <div className="q-win mini">
-      <span className="q-win-label" title={it.name}>{balLabel(it.name)}</span>
+      <span className="q-win-label" title={it.name}>{balLabel(it.name)}{it.window ? `·${it.window}` : ""}</span>
       <QuotaBar pct={it.percent_used} />
       <span className="q-win-reset">{rem}</span>
     </div>
