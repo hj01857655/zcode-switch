@@ -100,6 +100,8 @@ export const zh = {
   "m.saveLoginDisabledTitle": "当前登录已是存档「{name}」，无需重复保存",
   "m.accounts": "账号管理",
   "m.count": "{count} 个存档",
+  "m.searchPh": "搜索账号名…",
+  "m.searchNoMatch": "无匹配账号",
 
   "d.menu": "仪表盘",
   "d.accCount": "账号总数",

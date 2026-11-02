@@ -100,6 +100,8 @@ export const en = {
   "m.saveLoginDisabledTitle": "Current login is already saved as \"{name}\"",
   "m.accounts": "Accounts",
   "m.count": "{count} saved",
+  "m.searchPh": "Search accounts…",
+  "m.searchNoMatch": "No matching accounts",
 
   "d.menu": "Dashboard",
   "d.accCount": "Accounts",

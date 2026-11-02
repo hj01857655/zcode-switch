@@ -1985,6 +1985,21 @@ input:focus-visible,
 .dash-q b.danger { color: var(--red); }
 .dash-empty { padding: 22px 12px; text-align: center; color: var(--ink-mute); font-size: 13px; }
 
+/* 账号管理页搜索框：section-head 右侧，与 count 同行 */
+.acc-search {
+  margin-left: auto;
+  width: 210px;
+  font-size: 12.5px;
+  padding: 5px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--hairline, var(--ink-line, #ccc));
+  background: var(--bg-1);
+  color: var(--ink);
+  outline: none;
+}
+.acc-search:focus { border-color: var(--amber-deep, #b8860b); }
+.acc-search::placeholder { color: var(--ink-mute); }
+
 /* ---- 主题打磨（叠加层：只增不改，靠级联覆盖早期规则） ---- */
 ::selection { background: color-mix(in srgb, var(--amber) 32%, transparent); }
 

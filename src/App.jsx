@@ -16,6 +16,7 @@ import GatewayPage from "./views/gateway.jsx";
 import GatewayLogsPage from "./views/gateway-logs.jsx";
 import ReferralPage from "./views/referral.jsx";
 import DashboardPage from "./views/dashboard.jsx";
+import { quotaTotals, fmtTokens } from "./lib/quotaView.js";
 
 function useStore() {
   useSyncExternalStore(subscribe, getVersion, getVersion);
@@ -309,7 +310,7 @@ export default function App() {
   const s = useStore();
   const listRef = useRef(null);
   // 池行跳转定位：记住要定位的账号 id，切到账号页后滚动+闪灯
-  const [focusAcc, setFocusAcc] = useState(null);
+  const [accQuery, setAccQuery] = useState("");
   const VIEWS = ["dashboard", "accounts", "gateway", "gatewayLogs", "referral", "settings", "about"];
   // 记住上次停留的菜单：localStorage 是 WebView2 持久存储，重启应用恢复
   const [view, setViewRaw] = useState(() => {
@@ -353,6 +354,10 @@ export default function App() {
   const { claimAllRunning, refreshClaim, claimActive, autoClaimRunning } = runtimeFlags();
   const claimDisabled = claimAllRunning || refreshClaim.running || claimActive || autoClaimRunning;
 
+  const accQ = accQuery.trim().toLowerCase();
+  const shownAccs = accQ ? st.accounts.filter((a) => a.name.toLowerCase().includes(accQ) || a.id.toLowerCase().includes(accQ)) : st.accounts;
+  const accTotals = quotaTotals(st.accounts.map((a) => store.acctQuota[a.id]?.data).filter(Boolean));
+
   return (
     <div className="shell">
       <SideNav view={view} setView={setView} s={st} unsaved={unsaved} />
@@ -362,10 +367,26 @@ export default function App() {
             <Toolbar s={st} active={active} claimableCount={claimableCount} />
             <div className="section-head">
               <h2>{t("m.accounts")}</h2>
-              <span className="count">{t("m.count", { count: st.accounts.length })}</span>
+              <span className="count">{accQ ? `${shownAccs.length}/${st.accounts.length}` : t("m.count", { count: st.accounts.length })}</span>
+              {st.accounts.length ? (
+                <input className="acc-search" type="search" value={accQuery} placeholder={t("m.searchPh")}
+                  onChange={(e) => setAccQuery(e.target.value)} />
+              ) : null}
             </div>
+            {st.accounts.length ? (
+              <div className="dash-sub">
+                {t("d.quotaTotal")}
+                {accTotals.length
+                  ? accTotals.map((v) => (
+                      <span key={v.label} className="dash-q">
+                        {v.label} <b>{t("q.remainShort")} {fmtTokens(v.rem)}/{fmtTokens(v.tot)}</b>
+                      </span>
+                    ))
+                  : <span className="dash-q dash-q-pending">…</span>}
+              </div>
+            ) : null}
             <main className="list" ref={listRef}>
-              {st.accounts.length === 0 ? <EmptyState /> : st.accounts.map((a) => (
+              {st.accounts.length === 0 ? <EmptyState /> : shownAccs.length === 0 ? <div className="dash-empty">{t("m.searchNoMatch")}</div> : shownAccs.map((a) => (
                 <div key={a.id} data-acc={a.id}>
                   <AccountRow
                     a={a}
