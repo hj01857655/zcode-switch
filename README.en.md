@@ -20,11 +20,11 @@ Grab the installer for your platform from [Releases](https://github.com/hj018576
 | Platform | File |
 |---|---|
 | Windows x64 | `zcode-switch_<ver>_x64-setup.exe` (NSIS installer) |
-| Windows ARM64 | `zcode-switch_<ver>_arm64-setup.exe` (from the next release) |
+| Windows ARM64 | `zcode-switch_<ver>_arm64-setup.exe` (NSIS installer) |
 | macOS Apple Silicon | `zcode-switch_<ver>_aarch64.dmg` |
 | macOS Intel | `zcode-switch_<ver>_x64.dmg` |
 | Linux amd64 | `.deb` (Debian/Ubuntu) or `.AppImage` (universal) |
-| Linux arm64 | `.deb` / `.AppImage` (from the next release) |
+| Linux arm64 | `.deb` / `.AppImage` |
 
 **Requirements**: Windows 10+; macOS 12+; Ubuntu 22.04 / Debian 12+ (AppImage is universal). If SmartScreen / Gatekeeper warns on first launch, choose "Run anyway" — the binaries are not code-signed, which is expected.
 
@@ -37,7 +37,7 @@ Since v1.8.2 the app has built-in updates: it silently checks once after launch 
 | Install form | In-app update |
 |---|---|
 | Windows `*_x64-setup.exe` / `*_arm64-setup.exe` (NSIS) | ✅ Supported |
-| macOS `.dmg` | ✅ Supported (self-update uses the `.app.tar.gz` shipped alongside; `latest.json` lists macOS from the next release, so a mac install made before that updates manually once then becomes automatic) |
+| macOS `.dmg` | ✅ Supported (self-update uses the `.app.tar.gz` shipped alongside; `latest.json` lists macOS since v1.8.3, so mac installs made before that update manually once and become automatic afterwards) |
 | Linux `.AppImage` | ✅ Supported |
 | Windows portable `*_*_portable.exe` | ❌ Manual download required |
 | Linux `.deb` | ❌ Manual update (`apt` / reinstall the deb) |
